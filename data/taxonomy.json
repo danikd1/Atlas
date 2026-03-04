@@ -17,6 +17,7 @@
             {
               "id": "A1",
               "name": "Определение границ MVP",
+              "example_queries": ["как определить границы MVP", "что включить в MVP", "границы первой версии продукта"],
               "topic_descriptions": ["Материалы о формировании границ MVP, определении состава первой версии продукта, выборе функционала на основе баланса ценности, сложности и ресурсных ограничений, а также проверке продуктовых гипотез."],
               "keywords": [
                 "Границы MVP",
@@ -66,6 +67,7 @@
             {
               "id": "A2",
               "name": "Формирование первичного бэклога",
+              "example_queries": ["как сформировать бэклог", "первичный бэклог", "с чего начать бэклог"],
               "topic_descriptions": ["Материалы о создании и структурировании первичного бэклога, использовании Story Mapping, формировании карточек требований и организации работы Product Owner с системами Jira и Confluence."],
               "keywords": [
                 "Первичный бэклог",
@@ -107,8 +109,8 @@
                 "Backlog Storage Organization"
               ]
             },
-            { "id": "A3", "name": "ФО", "topic_descriptions": [], "keywords": [] },
-            { "id": "A4", "name": "реестр ФО", "topic_descriptions": [], "keywords": [] }
+            { "id": "A3", "name": "ФО", "example_queries": ["управление ФО", "как описать ФО", "работа с функциональными особенностями"], "topic_descriptions": [], "keywords": [] },
+            { "id": "A4", "name": "реестр ФО", "example_queries": ["реестр ФО", "как вести реестр функциональных особенностей", "каталог ФО"], "topic_descriptions": [], "keywords": [] }
           ]
         },
         {
@@ -117,8 +119,8 @@
           "keywords": [],
           "topic_descriptions": [],
           "activities": [
-            { "id": "A5", "name": "UX-исследования", "topic_descriptions": [], "keywords": [] },
-            { "id": "A6", "name": "A/B-тесты", "topic_descriptions": [], "keywords": [] }
+            { "id": "A5", "name": "UX-исследования", "example_queries": ["провести UX-исследование", "как исследовать пользователей", "юзабилити-тестирование"], "topic_descriptions": [], "keywords": [] },
+            { "id": "A6", "name": "A/B-тесты", "example_queries": ["провести A/B-тест", "как настроить A/B-тестирование", "проверка гипотезы экспериментом"], "topic_descriptions": [], "keywords": [] }
           ]
         },
         {
@@ -127,8 +129,8 @@
           "keywords": [],
           "topic_descriptions": [],
           "activities": [
-            { "id": "A7", "name": "discovery-инструменты / AI", "topic_descriptions": [], "keywords": [] },
-            { "id": "A8", "name": "рекрутинг", "topic_descriptions": [], "keywords": [] }
+            { "id": "A7", "name": "discovery-инструменты / AI", "example_queries": ["инструменты для discovery", "AI для исследований", "discovery и AI"], "topic_descriptions": [], "keywords": [] },
+            { "id": "A8", "name": "рекрутинг", "example_queries": ["как набрать респондентов", "рекрутинг для исследований", "поиск участников интервью"], "topic_descriptions": [], "keywords": [] }
           ]
         }
       ]

@@ -8,7 +8,7 @@ from sentence_transformers import SentenceTransformer
 
 from src.embedding_filter import (
     apply_embedding_filter,
-    build_topic_embedding,
+    build_topic_embedding_from_descriptions,
     filter_articles_by_embedding,
     get_embedding_model,
 )
@@ -30,21 +30,13 @@ class TestGetEmbeddingModel:
         assert isinstance(model, SentenceTransformer)
 
 
-class TestBuildTopicEmbedding:
-    """Тесты для функции build_topic_embedding."""
+class TestBuildTopicEmbeddingFromDescriptions:
+    """Тесты для функции build_topic_embedding_from_descriptions."""
     
     @pytest.fixture
     def model(self):
         """Фикстура для модели эмбеддингов."""
         return get_embedding_model()
-    
-    @pytest.fixture
-    def keywords_config(self):
-        """Фикстура для конфигурации ключевых слов."""
-        return {
-            "strong": ["dora", "cicd", "devops"],
-            "weak": ["agile", "kanban"]
-        }
     
     @pytest.fixture
     def topic_descriptions(self):
@@ -54,25 +46,25 @@ class TestBuildTopicEmbedding:
             "Материалы про процессы доставки и стабильность релизов."
         ]
     
-    def test_build_topic_embedding_shape(self, model, keywords_config, topic_descriptions):
+    def test_build_topic_embedding_from_descriptions_shape(self, model, topic_descriptions):
         """Проверяет форму topic embedding."""
-        topic_embedding = build_topic_embedding(keywords_config, model, topic_descriptions)
+        topic_embedding = build_topic_embedding_from_descriptions(topic_descriptions, model)
         
         assert isinstance(topic_embedding, np.ndarray)
         assert topic_embedding.ndim == 1
         assert topic_embedding.shape[0] > 0
     
-    def test_build_topic_embedding_normalized(self, model, keywords_config, topic_descriptions):
+    def test_build_topic_embedding_from_descriptions_normalized(self, model, topic_descriptions):
         """Проверяет, что topic embedding нормализован."""
-        topic_embedding = build_topic_embedding(keywords_config, model, topic_descriptions)
+        topic_embedding = build_topic_embedding_from_descriptions(topic_descriptions, model)
         
         norm = np.linalg.norm(topic_embedding)
         assert abs(norm - 1.0) < 1e-6  # Должен быть нормализован
     
-    def test_build_topic_embedding_invalid_config(self, model):
-        """Проверяет обработку некорректной конфигурации."""
+    def test_build_topic_embedding_from_descriptions_empty_raises(self, model):
+        """Проверяет, что пустой список описаний вызывает ValueError."""
         with pytest.raises(ValueError):
-            build_topic_embedding({}, model)  # keywords_config игнорируется, но topic_descriptions обязателен
+            build_topic_embedding_from_descriptions([], model)
 
 
 class TestApplyEmbeddingFilter:
@@ -86,15 +78,11 @@ class TestApplyEmbeddingFilter:
     @pytest.fixture
     def topic_embedding(self, model):
         """Фикстура для topic embedding."""
-        keywords_config = {
-            "strong": ["dora", "cicd"],
-            "weak": ["agile"]
-        }
         topic_descriptions = [
             "Статьи про DevOps метрики и CI/CD пайплайны.",
             "Материалы про процессы доставки и стабильность релизов."
         ]
-        return build_topic_embedding(keywords_config, model, topic_descriptions)
+        return build_topic_embedding_from_descriptions(topic_descriptions, model)
     
     @pytest.fixture
     def sample_df(self):
@@ -155,12 +143,13 @@ class TestFilterArticlesByEmbedding:
         }
     
     @pytest.fixture
-    def topic_descriptions(self):
-        """Фикстура для описаний топиков."""
-        return [
+    def topic_descriptions_per_node(self):
+        """Фикстура: список (node_id, descriptions) по узлам."""
+        descriptions = [
             "Статьи про DevOps метрики и CI/CD пайплайны.",
             "Материалы про процессы доставки и стабильность релизов."
         ]
+        return [("A1", descriptions)]
     
     @pytest.fixture
     def sample_df(self):
@@ -170,19 +159,19 @@ class TestFilterArticlesByEmbedding:
             "summary": ["Статья о DORA метриках", "Рецепт вкусного супа"]
         })
     
-    def test_filter_articles_by_embedding_returns_tuple(self, model, keywords_config, topic_descriptions, sample_df):
+    def test_filter_articles_by_embedding_returns_tuple(self, model, keywords_config, topic_descriptions_per_node, sample_df):
         """Проверяет, что функция возвращает кортеж (DataFrame, stats)."""
         df_result, stats = filter_articles_by_embedding(
-            sample_df, keywords_config, model, topic_descriptions=topic_descriptions
+            sample_df, keywords_config, model, topic_descriptions_per_node=topic_descriptions_per_node
         )
         
         assert isinstance(df_result, pd.DataFrame)
         assert isinstance(stats, dict)
     
-    def test_filter_articles_by_embedding_stats(self, model, keywords_config, topic_descriptions, sample_df):
+    def test_filter_articles_by_embedding_stats(self, model, keywords_config, topic_descriptions_per_node, sample_df):
         """Проверяет структуру статистики."""
         df_result, stats = filter_articles_by_embedding(
-            sample_df, keywords_config, model, topic_descriptions=topic_descriptions
+            sample_df, keywords_config, model, topic_descriptions_per_node=topic_descriptions_per_node
         )
         
         assert "total_articles" in stats
@@ -196,21 +185,30 @@ class TestFilterArticlesByEmbedding:
         assert stats["total_articles"] == len(sample_df)
         assert stats["passed"] + stats["rejected"] == stats["total_articles"]
     
-    def test_filter_articles_by_embedding_empty_df(self, model, keywords_config, topic_descriptions):
+    def test_filter_articles_by_embedding_empty_df(self, model, keywords_config, topic_descriptions_per_node):
         """Проверяет обработку пустого DataFrame."""
         empty_df = pd.DataFrame()
         df_result, stats = filter_articles_by_embedding(
-            empty_df, keywords_config, model, topic_descriptions=topic_descriptions
+            empty_df, keywords_config, model, topic_descriptions_per_node=topic_descriptions_per_node
         )
         
         assert df_result.empty
         assert stats["total_articles"] == 0
         assert stats["passed"] == 0
     
-    def test_filter_articles_by_embedding_missing_columns(self, model, keywords_config, topic_descriptions):
+    def test_filter_articles_by_embedding_missing_columns(self, model, keywords_config, topic_descriptions_per_node):
         """Проверяет обработку DataFrame без нужных колонок."""
         invalid_df = pd.DataFrame({"wrong_column": ["test"]})
         
         with pytest.raises(ValueError):
-            filter_articles_by_embedding(invalid_df, keywords_config, model, topic_descriptions=topic_descriptions)
+            filter_articles_by_embedding(
+                invalid_df, keywords_config, model, topic_descriptions_per_node=topic_descriptions_per_node
+            )
+    
+    def test_filter_articles_by_embedding_empty_topic_descriptions_per_node_raises(self, model, keywords_config, sample_df):
+        """Проверяет, что пустой topic_descriptions_per_node вызывает ValueError."""
+        with pytest.raises(ValueError):
+            filter_articles_by_embedding(
+                sample_df, keywords_config, model, topic_descriptions_per_node=[]
+            )
 

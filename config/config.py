@@ -114,7 +114,7 @@ GENERIC_SINGLE_LEMMAS = {
 TAXONOMY_SELECTION = {
     "discipline": "D1",
     "ga": "GA1",
-    "activity": "A2",
+    "activity": "A1",
 }
 
 # Эмбеддинги: параметры фильтрации

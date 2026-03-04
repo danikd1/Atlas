@@ -6,7 +6,7 @@
 - Фильтрацию статей по сходству с topic embedding
 """
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -17,6 +17,8 @@ from config.config import (
     DEFAULT_EMBED_THRESHOLD,
     EMBEDDING_MODEL_NAME,
 )
+
+from .tools.llm_utils import clean_text_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -45,58 +47,36 @@ def get_embedding_model(model_name: str = EMBEDDING_MODEL_NAME) -> SentenceTrans
         raise RuntimeError(error_msg) from e
 
 
-def build_topic_embedding(
-    keywords_config: Dict[str, List[str]],
+def build_topic_embedding_from_descriptions(
+    descriptions: List[str],
     model: SentenceTransformer,
-    topic_descriptions: Optional[List[str]] = None,
 ) -> np.ndarray:
     """
-    Строит topic embedding только из описаний топиков.
-    
+    Строит один нормализованный topic embedding из списка описаний одного узла.
+
     Args:
-        keywords_config: Конфигурация ключевых слов (сохраняется для совместимости, не используется)
-        model: Модель для эмбеддингов (обязательный параметр)
-        topic_descriptions: Описания топиков (из таксономии по D/GA/A).
-                           Должен быть непустым списком строк.
-        
+        descriptions: Список строк-описаний топика (один узел D/GA/A).
+        model: Модель для эмбеддингов.
+
     Returns:
-        Нормализованный topic embedding (вектор)
-        
-    Raises:
-        ValueError: Если входные данные некорректны
-        RuntimeError: Если не удалось построить embedding
+        Нормализованный единичный вектор.
     """
-    if topic_descriptions is None:
-        raise ValueError("topic_descriptions должен быть непустым списком описаний топиков")
-    
-    # Нормализуем и фильтруем описания
     proto_texts = [
         str(t).strip()
-        for t in topic_descriptions
+        for t in descriptions
         if isinstance(t, str) and t.strip()
     ]
     if not proto_texts:
-        raise ValueError("topic_descriptions не содержит ни одного непустого текстового описания")
-    
-    try:
-        # Получаем эмбеддинги
-        proto_embs = model.encode(proto_texts, normalize_embeddings=True)
-        
-        # Усредняем и нормализуем
-        topic_embedding = proto_embs.mean(axis=0)
-        topic_embedding /= np.linalg.norm(topic_embedding)
-        
-        logger.info(f"✅ Topic embedding построен, shape: {topic_embedding.shape}")
-        return topic_embedding
-    except Exception as e:
-        error_msg = f"Ошибка при построении topic embedding: {e}"
-        logger.error(error_msg)
-        raise RuntimeError(error_msg) from e
+        raise ValueError("descriptions не содержит ни одной непустой строки")
+    proto_embs = model.encode(proto_texts, normalize_embeddings=True)
+    topic_embedding = proto_embs.mean(axis=0)
+    topic_embedding /= np.linalg.norm(topic_embedding)
+    return topic_embedding
 
 
 def apply_embedding_filter(
     df_input: pd.DataFrame,
-    topic_embedding: np.ndarray,
+    topic_embedding: Union[np.ndarray, List[np.ndarray]],
     model: SentenceTransformer,
     text_column: str = "embed_text",
     threshold: float = DEFAULT_EMBED_THRESHOLD,
@@ -105,10 +85,13 @@ def apply_embedding_filter(
 ) -> pd.DataFrame:
     """
     Применяет embedding-фильтр к статьям.
+
+    topic_embedding может быть одним вектором или списком векторов (по одному на узел).
+    При списке сходство = максимум из скалярных произведений со всеми узлами.
     
     Args:
         df_input: DataFrame со статьями (должен содержать колонки 'title' и 'summary')
-        topic_embedding: Эмбеддинг топика для сравнения
+        topic_embedding: Один вектор топика или список векторов (один на узел D/GA/A)
         model: Модель для эмбеддингов (обязательный параметр)
         text_column: Название колонки с текстом для оценки
         threshold: Порог сходства
@@ -131,13 +114,31 @@ def apply_embedding_filter(
     
     df_input = df_input.copy()
     
-    # Создаем колонку с текстом для эмбеддинга, если её нет
+    # Создаем колонку с текстом для эмбеддинга, если её нет (title + summary, очищенные от HTML)
     if text_column not in df_input.columns:
-        df_input[text_column] = (
-            df_input["title"].fillna("") + " " + df_input["summary"].fillna("")
-        ).str.lower()
+        def _embed_text(row: pd.Series) -> str:
+            title = row.get("title") or ""
+            summary = row.get("summary") or ""
+            combined = f"{title} {summary}"
+            cleaned = clean_text_for_llm(combined, max_chars=None)
+            return cleaned.lower()
+
+        df_input[text_column] = df_input.apply(_embed_text, axis=1)
     
     texts = df_input[text_column].tolist()
+    
+    # Выводим в консоль образцы текста статей (видны при запуске main.py)
+    _max_preview = 400
+    _num_samples = min(3, len(texts))
+    print("\n--- Текст для эмбеддинга статей (образцы) ---")
+    for i in range(_num_samples):
+        preview = (texts[i] or "")[: _max_preview]
+        if len(texts[i] or "") > _max_preview:
+            preview += "..."
+        print(f"  Статья {i + 1}/{len(texts)}: {preview}")
+    if len(texts) > _num_samples:
+        print(f"  ... всего статей: {len(texts)}")
+    print("---------------------------------------------\n")
     
     try:
         # Получаем эмбеддинги статей
@@ -149,8 +150,13 @@ def apply_embedding_filter(
             normalize_embeddings=True
         )
         
-        # Вычисляем сходство
-        sims = np.dot(article_embeds, topic_embedding)
+        # Вычисляем сходство: один вектор — скалярное произведение; список векторов — max по узлам
+        if isinstance(topic_embedding, list):
+            topic_matrix = np.stack(topic_embedding, axis=0)
+            dots = np.dot(article_embeds, topic_matrix.T)
+            sims = np.max(dots, axis=1)
+        else:
+            sims = np.dot(article_embeds, topic_embedding)
         
         df_input["embed_similarity"] = sims
         df_input["embed_ok"] = df_input["embed_similarity"] >= threshold
@@ -170,18 +176,22 @@ def filter_articles_by_embedding(
     df: pd.DataFrame,
     keywords_config: Dict[str, List[str]],
     model: SentenceTransformer,
-    topic_descriptions: Optional[List[str]] = None,
+    topic_descriptions_per_node: List[Tuple[str, List[str]]],
     threshold: float = DEFAULT_EMBED_THRESHOLD,
     batch_size: int = DEFAULT_EMBED_BATCH_SIZE
 ) -> Tuple[pd.DataFrame, Dict]:
     """
     Фильтрует статьи по сходству с topic embedding.
 
+    Используется только самый специфичный выбранный узел (последний в цепочке D → GA → A):
+    если выбрана активность A — её topic; если только GA — topic GA; если только D — topic D.
+    Сходство статьи = скалярное произведение эмбеддинга статьи и этого одного topic-вектора.
+
     Args:
         df: DataFrame со статьями (должен содержать колонки 'title' и 'summary')
         keywords_config: Конфигурация ключевых слов (обязательный параметр)
         model: Модель для эмбеддингов (обязательный параметр)
-        topic_descriptions: Описания топиков из таксономии (по выбранным D/GA/A). Если None — [].
+        topic_descriptions_per_node: Список пар (node_id, list of topic_descriptions), порядок D → GA → A.
         threshold: Порог сходства для фильтрации
         batch_size: Размер батча для обработки
 
@@ -189,7 +199,7 @@ def filter_articles_by_embedding(
         Tuple[отфильтрованный_DataFrame, статистика]
         
     Raises:
-        ValueError: Если входные данные некорректны
+        ValueError: Если входные данные некорректны или нет ни одного узла с описаниями
         RuntimeError: Если не удалось построить embedding или применить фильтр
     """
     import time
@@ -210,13 +220,23 @@ def filter_articles_by_embedding(
     if "title" not in df.columns or "summary" not in df.columns:
         raise ValueError("DataFrame должен содержать колонки 'title' и 'summary'")
     
-    # Построение topic embedding (ключевые слова + описания топиков из таксономии)
-    logger.info("Построение topic embedding...")
-    topic_embedding = build_topic_embedding(
-        keywords_config, model, topic_descriptions=topic_descriptions
-    )
+    if not topic_descriptions_per_node:
+        raise ValueError(
+            "topic_descriptions_per_node не должен быть пустым: нужен хотя бы один узел с описаниями топика"
+        )
     
-    # Применение фильтра
+    # Берём только самый специфичный узел (последний в списке D → GA → A)
+    node_id, descriptions = topic_descriptions_per_node[-1]
+    # Выводим в консоль текст узла (видны при запуске main.py)
+    print("\n--- Текст для эмбеддинга узла (topic) ---")
+    print(f"  Узел: {node_id}")
+    for idx, d in enumerate(descriptions, 1):
+        print(f"  Описание {idx}: {(d or '').strip()}")
+    print("-----------------------------------------\n")
+    logger.info("Построение topic embedding для самого специфичного узла: %s", node_id)
+    topic_embedding = build_topic_embedding_from_descriptions(descriptions, model)
+    
+    # Сходство = скалярное произведение с этим одним topic-вектором
     df_filtered = apply_embedding_filter(
         df,
         topic_embedding,

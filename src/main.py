@@ -3,14 +3,16 @@
 
 Запускает все этапы обработки и выводит итоговый результат.
 """
+import argparse
 import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from .embedding_filter import filter_articles_by_embedding, get_embedding_model
 from .lemmatization_filter import filter_articles_by_keywords
-from .taxonomy import get_keywords_config_for_selection, get_topic_descriptions_for_selection, load_taxonomy
+from .taxonomy import get_keywords_config_for_selection, get_topic_descriptions_per_node, load_taxonomy
 from .tools.llm_utils import create_gigachat_client, format_summary_text, summarize_article
 # from .graph import filter_articles_by_relevance  # Закомментировано - не используется
 from .rss_parser import collect_articles_for_window
@@ -27,6 +29,17 @@ from config.config import (
     TAXONOMY_SELECTION,
 )
 
+
+def _resolve_taxonomy_selection(override: Optional[dict] = None) -> dict:
+    """Выбор узлов для пайплайна: override (от агента) или из config."""
+    if override is not None:
+        return {
+            "discipline": override.get("discipline"),
+            "ga": override.get("ga"),
+            "activity": override.get("activity"),
+        }
+    return TAXONOMY_SELECTION
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.WARNING,  # Только предупреждения и ошибки
@@ -39,12 +52,16 @@ GREEN = "\033[32m"
 RESET = "\033[0m"
 
 
-def run_pipeline():
+def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
     """
     Запускает весь пайплайн обработки статей.
+
+    Args:
+        taxonomy_selection_override: Если задан, используется вместо TAXONOMY_SELECTION из config (например, результат агента-роутера).
     """
+    selection = _resolve_taxonomy_selection(taxonomy_selection_override)
     pipeline_start = time.time()
-    
+
     print("="*60)
     print("🚀 ЗАПУСК ПАЙПЛАЙНА СБОРА СТАТЕЙ С HABR")
     print("="*60)
@@ -99,7 +116,7 @@ def run_pipeline():
     print("🔍 Этап 2: Фильтрация по ключевым словам...")
     stage2_start = time.time()
     taxonomy = load_taxonomy()
-    keywords_config = get_keywords_config_for_selection(taxonomy, TAXONOMY_SELECTION)
+    keywords_config = get_keywords_config_for_selection(taxonomy, selection)
     df_filtered, stats_keywords = filter_articles_by_keywords(
         df_for_pipeline,
         keywords_config=keywords_config,
@@ -131,13 +148,13 @@ def run_pipeline():
     # Этап 3: Фильтрация по эмбеддингам (ключевые слова и topic_descriptions из таксономии по D/GA/A)
     print("🎯 Этап 3: Фильтрация по эмбеддингам...")
     stage3_start = time.time()
-    topic_descriptions = get_topic_descriptions_for_selection(taxonomy, TAXONOMY_SELECTION)
+    topic_descriptions_per_node = get_topic_descriptions_per_node(taxonomy, selection)
     embed_model = get_embedding_model()
     df_embedding, stats_embedding = filter_articles_by_embedding(
         df_filtered,
         keywords_config=keywords_config,
         model=embed_model,
-        topic_descriptions=topic_descriptions,
+        topic_descriptions_per_node=topic_descriptions_per_node,
         threshold=DEFAULT_EMBED_THRESHOLD
     )
     
@@ -320,5 +337,30 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    parser = argparse.ArgumentParser(description="Пайплайн сбора и фильтрации статей с Habr.")
+    parser.add_argument(
+        "--query",
+        type=str,
+        default=None,
+        help="Запрос на естественном языке: агент-роутер выберет узлы D/GA/A, пайплайн запустится с этой выборкой.",
+    )
+    args = parser.parse_args()
+
+    if args.query:
+        from .agents.router import run_router, router_output_to_taxonomy_selection
+        print("🤖 Запрос к агенту-роутеру: выбор узлов таксономии по запросу...")
+        router_out = run_router(args.query)
+        selection = router_output_to_taxonomy_selection(router_out)
+        if router_out.get("clarification_needed") and router_out.get("clarification_question"):
+            print("❓ Требуется уточнение:", router_out["clarification_question"])
+            print("   Запустите снова с уточнённым запросом (--query \"...\") или без --query для конфига.")
+            raise SystemExit(1)
+        if router_out.get("status") == "not_found" or selection is None:
+            print("⚠️ По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
+            selection = None
+        else:
+            print(f"   Выборка: D={selection.get('discipline')}, GA={selection.get('ga')}, A={selection.get('activity')}")
+        run_pipeline(taxonomy_selection_override=selection)
+    else:
+        run_pipeline()
 

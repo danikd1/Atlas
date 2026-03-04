@@ -8,7 +8,7 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -64,51 +64,54 @@ def _collect_topic_descriptions_from_node(node: Dict[str, Any]) -> List[str]:
     return [str(t).strip() for t in raw if t and isinstance(t, str)]
 
 
-def get_topic_descriptions_for_selection(
+def get_topic_descriptions_per_node(
     taxonomy: Dict[str, Any],
     selection: Optional[Dict[str, Optional[str]]] = None,
-) -> List[str]:
+) -> List[Tuple[str, List[str]]]:
     """
-    Собирает список описаний топиков (TOPIC_DESCRIPTIONS) для построения topic embedding
-    по выбранным узлам таксономии (D / GA / A).
-
-    Выбранные узлы задаются полями discipline, ga, activity (каждый может быть null).
-    Описания собираются с выбранных узлов и объединяются в один список в порядке D → GA → A.
+    Собирает описания топиков по каждому выбранному узлу отдельно (D, GA, A).
+    У каждого узла свой список описаний, без объединения в один.
 
     Args:
         taxonomy: Загруженная таксономия (результат load_taxonomy).
         selection: Словарь с ключами discipline, ga, activity.
-                   Пример: {"discipline": "D1", "ga": "GA2", "activity": "A5"}.
 
     Returns:
-        Список строк — описания топиков для передачи в build_topic_embedding.
+        Список пар (node_id, list of topic_descriptions) для каждого узла,
+        у которого есть хотя бы одно описание. Порядок: D → GA → A.
     """
     selection = selection or {}
     discipline_id = selection.get("discipline")
     ga_id = selection.get("ga")
     activity_id = selection.get("activity")
 
-    descriptions: List[str] = []
+    result: List[Tuple[str, List[str]]] = []
 
     disciplines = taxonomy.get("disciplines") or []
     for d in disciplines:
         if d.get("id") != discipline_id:
             continue
-        descriptions.extend(_collect_topic_descriptions_from_node(d))
+        desc_d = _collect_topic_descriptions_from_node(d)
+        if desc_d:
+            result.append((d.get("id", ""), desc_d))
         if ga_id is not None:
             for g in (d.get("groups") or []):
                 if g.get("id") != ga_id:
                     continue
-                descriptions.extend(_collect_topic_descriptions_from_node(g))
+                desc_g = _collect_topic_descriptions_from_node(g)
+                if desc_g:
+                    result.append((g.get("id", ""), desc_g))
                 if activity_id is not None:
                     for a in (g.get("activities") or []):
                         if a.get("id") == activity_id:
-                            descriptions.extend(_collect_topic_descriptions_from_node(a))
+                            desc_a = _collect_topic_descriptions_from_node(a)
+                            if desc_a:
+                                result.append((a.get("id", ""), desc_a))
                             break
                 break
         break
 
-    return descriptions
+    return result
 
 
 def get_keywords_config_for_selection(
@@ -173,3 +176,42 @@ def get_keywords_config_for_selection(
         "weak": [],
         "blacklist": blacklist,
     }
+
+
+def format_taxonomy_for_router_prompt(taxonomy: Dict[str, Any]) -> str:
+    """
+    Формирует блок «Предметная область» для системного промпта роутера из таксономии.
+    Используются name, topic_descriptions (как описание), keywords и example_queries (у активностей).
+    """
+    lines: List[str] = []
+    for d in taxonomy.get("disciplines") or []:
+        lines.append(f"{d['id']}. {d['name']}")
+        desc = _collect_topic_descriptions_from_node(d)
+        if desc:
+            lines.append(f"  Описание: {' '.join(desc)}")
+        kw = _collect_keywords_from_node(d)
+        if kw:
+            lines.append(f"  Ключевые слова: {', '.join(kw)}")
+        for g in d.get("groups") or []:
+            lines.append(f"  {g['id']}. {g['name']}")
+            g_desc = _collect_topic_descriptions_from_node(g)
+            if g_desc:
+                lines.append(f"    Описание: {' '.join(g_desc)}")
+            g_kw = _collect_keywords_from_node(g)
+            if g_kw:
+                lines.append(f"    Ключевые слова: {', '.join(g_kw)}")
+            for a in g.get("activities") or []:
+                a_desc = _collect_topic_descriptions_from_node(a)
+                part = f"    {a['id']}. {a['name']}"
+                if a_desc:
+                    part += f" — {' '.join(a_desc)}"
+                lines.append(part)
+                a_kw = _collect_keywords_from_node(a)
+                if a_kw:
+                    lines.append(f"      Ключевые слова: {', '.join(a_kw)}")
+                eq = a.get("example_queries") or []
+                eq = [str(q).strip() for q in eq if q and isinstance(q, str)][:5]
+                if eq:
+                    lines.append(f"      Примеры запросов: {'; '.join(eq)}")
+        lines.append("")
+    return "\n".join(lines).strip()
