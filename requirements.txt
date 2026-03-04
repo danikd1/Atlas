@@ -1,0 +1,22 @@
+feedparser>=6.0.10
+beautifulsoup4>=4.12.0
+pandas>=2.0.0
+trafilatura>=1.6.0
+lxml>=4.9.0
+lxml_html_clean>=0.4.0
+pymorphy3>=2.0.0
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+torch>=2.0.0
+pytest>=7.4.0
+gigachat>=0.1.0
+langgraph>=0.0.20
+openpyxl>=3.1.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+# Примечание: используем gigachat напрямую, НЕ langchain-gigachat
+# langchain-gigachat конфликтует с langgraph (требует старую версию langchain-core)
+
+# PostgreSQL
+psycopg2-binary>=2.9.0
+

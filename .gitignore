@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Python кэш
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Виртуальные окружения
+env/
+venv/
+ENV/
+.venv
+
+# Результаты работы (CSV в outputs игнорируются)
+outputs/*.csv
+*.xlsx
+*.parquet
+
+# Исключения для конфигурационных файлов (таксономия — основной источник ключевых слов)
+!data/taxonomy.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+

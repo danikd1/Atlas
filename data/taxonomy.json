@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "blacklist": [],
+  "disciplines": [
+    {
+      "id": "D1",
+      "name": "Работа с идеями и планирование",
+      "keywords": [],
+      "topic_descriptions": [],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "Формирование и структурирование решения",
+          "keywords": [],
+          "topic_descriptions": [],
+          "activities": [
+            {
+              "id": "A1",
+              "name": "Определение границ MVP",
+              "topic_descriptions": ["Материалы о формировании границ MVP, определении состава первой версии продукта, выборе функционала на основе баланса ценности, сложности и ресурсных ограничений, а также проверке продуктовых гипотез."],
+              "keywords": [
+                "Границы MVP",
+                "MVP boundaries",
+                "Минимум функций",
+                "Minimum features",
+                "Первая версия",
+                "First version",
+                "Тестирование гипотез",
+                "Hypothesis testing",
+                "Обратная связь",
+                "Feedback",
+                "Пользовательское исследование",
+                "User research",
+                "Целевой продукт",
+                "Target product",
+                "Ранняя проверка",
+                "Early validation",
+                "Требования MVP",
+                "MVP requirements",
+                "Важность фич",
+                "Feature importance",
+                "Сложность фич",
+                "Feature complexity",
+                "Последовательность фич",
+                "Features sequence",
+                "Критические фичи",
+                "Critical features",
+                "Продуктовая концепция",
+                "Product concept",
+                "Ценности продукта",
+                "Product value",
+                "Временные рамки",
+                "Timeframe",
+                "Ресурсные ограничения",
+                "Resource constraints",
+                "Аналитическая матрица",
+                "Analytical matrix",
+                "Ограниченные ресурсы",
+                "Limited resources",
+                "Простота проверки",
+                "Ease of validation",
+                "Первичная гипотеза",
+                "Primary hypothesis"
+              ]
+            },
+            {
+              "id": "A2",
+              "name": "Формирование первичного бэклога",
+              "topic_descriptions": ["Материалы о создании и структурировании первичного бэклога, использовании Story Mapping, формировании карточек требований и организации работы Product Owner с системами Jira и Confluence."],
+              "keywords": [
+                "Первичный бэклог",
+                "Initial Backlog",
+                "Story Mapping",
+                "Карточка требований",
+                "Requirement Card",
+                "Владелец продукта",
+                "Product Owner",
+                "Представитель команды",
+                "Team Representative",
+                "Jira",
+                "Confluence",
+                "Требования",
+                "Requirements",
+                "Функциональные возможности",
+                "Functional Capabilities",
+                "Внутренний пользователь",
+                "Internal User",
+                "Внешний пользователь",
+                "External User",
+                "Служба безопасности",
+                "Security Department",
+                "Отдел Инфраструктуры",
+                "Infrastructure Department",
+                "Командуемые участники",
+                "Stakeholders",
+                "Элементы бэклога",
+                "Backlog Items",
+                "Согласование",
+                "Approval",
+                "Декомпозиция требований",
+                "Requirement Decomposition",
+                "Интересованные лица",
+                "Interested Parties",
+                "Заполнение карточки",
+                "Card Filling",
+                "Организация хранения бэклога",
+                "Backlog Storage Organization"
+              ]
+            },
+            { "id": "A3", "name": "ФО", "topic_descriptions": [], "keywords": [] },
+            { "id": "A4", "name": "реестр ФО", "topic_descriptions": [], "keywords": [] }
+          ]
+        },
+        {
+          "id": "GA2",
+          "name": "Исследование и проверка гипотез",
+          "keywords": [],
+          "topic_descriptions": [],
+          "activities": [
+            { "id": "A5", "name": "UX-исследования", "topic_descriptions": [], "keywords": [] },
+            { "id": "A6", "name": "A/B-тесты", "topic_descriptions": [], "keywords": [] }
+          ]
+        },
+        {
+          "id": "GA3",
+          "name": "Инструментальная поддержка исследований",
+          "keywords": [],
+          "topic_descriptions": [],
+          "activities": [
+            { "id": "A7", "name": "discovery-инструменты / AI", "topic_descriptions": [], "keywords": [] },
+            { "id": "A8", "name": "рекрутинг", "topic_descriptions": [], "keywords": [] }
+          ]
+        }
+      ]
+    }
+  ]
+}
