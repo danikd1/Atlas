@@ -16,7 +16,12 @@ from .taxonomy import get_keywords_config_for_selection, get_topic_descriptions_
 from .tools.llm_utils import create_gigachat_client, format_summary_text, summarize_article
 # from .graph import filter_articles_by_relevance  # Закомментировано - не используется
 from .rss_parser import collect_articles_for_window
-from .tools.db_state import get_connection, load_articles_for_window
+from .tools.db_state import (
+    get_connection,
+    get_or_create_collection,
+    load_articles_for_window,
+    update_collection_last_refreshed,
+)
 from .tools.rate_limiter import RateLimiter
 from .tools.text_extraction import add_full_text_column
 from config.config import (
@@ -52,7 +57,10 @@ GREEN = "\033[32m"
 RESET = "\033[0m"
 
 
-def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
+def run_pipeline(
+    taxonomy_selection_override: Optional[dict] = None,
+    collection_name: Optional[str] = None,
+):
     """
     Запускает весь пайплайн обработки статей.
 
@@ -116,6 +124,16 @@ def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
     print("🔍 Этап 2: Фильтрация по ключевым словам...")
     stage2_start = time.time()
     taxonomy = load_taxonomy()
+    # Привязка к коллекции: получить или создать запись в collections для текущего selection.
+    # Если имя коллекции было задано пользователем (collection_name), используем его.
+    collection = get_or_create_collection(
+        conn,
+        selection,
+        taxonomy,
+        collection_name=collection_name,
+    )
+    if collection:
+        print(f"   📁 Коллекция: {collection['name']} (id={collection['id']})")
     keywords_config = get_keywords_config_for_selection(taxonomy, selection)
     df_filtered, stats_keywords = filter_articles_by_keywords(
         df_for_pipeline,
@@ -223,9 +241,9 @@ def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
     print("📝 Этап 6: Суммаризация статей...")
     stage6_start = time.time()
     
-    # Создаем клиент GigaChat и rate limiter один раз
-    giga_client = create_gigachat_client()
-    rate_limiter = RateLimiter(delay_seconds=DEFAULT_LLM_SLEEP)
+    # Создаем клиент GigaChat и rate limiter один раз (закомментировано — суммаризация отключена)
+    # giga_client = create_gigachat_client()
+    # rate_limiter = RateLimiter(delay_seconds=DEFAULT_LLM_SLEEP)
     
     summaries = []
     total_relevant = len(df_relevant)
@@ -240,14 +258,16 @@ def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
             summaries.append("Не удалось получить текст статьи для суммаризации.")
             continue
         
-        print(f"   ▶ Суммаризация [{idx}/{total_relevant}]: {title[:60]}...")
-        summary = summarize_article(
-            title=title,
-            full_text=full_text,
-            client=giga_client,
-            rate_limiter=rate_limiter
-        )
-        summaries.append(summary)
+        # Суммаризация отключена — подставляем заглушку вместо вызова LLM
+        # print(f"   ▶ Суммаризация [{idx}/{total_relevant}]: {title[:60]}...")
+        # summary = summarize_article(
+        #     title=title,
+        #     full_text=full_text,
+        #     client=giga_client,
+        #     rate_limiter=rate_limiter
+        # )
+        # summaries.append(summary)
+        summaries.append("(Суммаризация отключена)")
     
     df_relevant["summary"] = summaries
     
@@ -263,7 +283,23 @@ def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
     
     output_file = outputs_dir / "articles_filtered.csv"
     df_relevant.to_csv(output_file, index=False, encoding='utf-8')
-    
+
+    # Обновить время последнего обновления коллекции после успешного прогона
+    if collection and collection.get("id"):
+        update_collection_last_refreshed(conn, collection["id"])
+
+    # Запись RAG-документов в rag_documents для выбранной коллекции (эмбеддинги + upsert)
+    if conn and collection and not df_relevant.empty:
+        try:
+            from .rag_prep import prepare_and_upsert_rag_documents
+            rag_count = prepare_and_upsert_rag_documents(
+                conn, collection, df_relevant, model=embed_model
+            )
+            if rag_count > 0:
+                print(f"   📎 RAG: записано документов в коллекцию: {rag_count}")
+        except Exception as e:
+            logger.warning("Не удалось записать RAG-документы (проверьте pgvector и таблицу rag_documents): %s", e)
+
     # Итоговая статистика
     total_time = time.time() - pipeline_start
     
@@ -309,6 +345,8 @@ def run_pipeline(taxonomy_selection_override: Optional[dict] = None):
     print()
     print(f"⏱️  Общее время выполнения: {total_time:.2f} сек ({total_time/60:.2f} мин)")
     print(f"💾 Результат сохранен: {output_file}")
+    if collection and collection.get("id"):
+        print(f"📁 Коллекция обновлена: {collection.get('name', '')} (id={collection['id']})")
     print("="*60)
     
     # Вывод дайджеста
@@ -358,9 +396,15 @@ if __name__ == "__main__":
         if router_out.get("status") == "not_found" or selection is None:
             print("⚠️ По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
             selection = None
+            collection_name = None
         else:
             print(f"   Выборка: D={selection.get('discipline')}, GA={selection.get('ga')}, A={selection.get('activity')}")
-        run_pipeline(taxonomy_selection_override=selection)
+            try:
+                raw_name = input("📝 Введите имя коллекции (Enter — имя по умолчанию): ").strip()
+            except EOFError:
+                raw_name = ""
+            collection_name = raw_name or None
+        run_pipeline(taxonomy_selection_override=selection, collection_name=collection_name)
     else:
         run_pipeline()
 

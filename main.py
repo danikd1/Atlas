@@ -46,8 +46,15 @@ if __name__ == "__main__":
         if router_out.get("status") == "not_found" or selection is None:
             print("⚠️ По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
             selection = None
+            collection_name = None
         else:
             print(f"   Выборка: D={selection.get('discipline')}, GA={selection.get('ga')}, A={selection.get('activity')}")
-        run_pipeline(taxonomy_selection_override=selection)
+            # Пользователь выбирает имя коллекции, под которой будет сохранён результат этого запуска.
+            try:
+                raw_name = input("📝 Введите имя коллекции (Enter — имя по умолчанию): ").strip()
+            except EOFError:
+                raw_name = ""
+            collection_name = raw_name or None
+        run_pipeline(taxonomy_selection_override=selection, collection_name=collection_name)
     else:
         run_pipeline()

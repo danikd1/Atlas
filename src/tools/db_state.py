@@ -1,28 +1,48 @@
 """
-Утилиты для работы с PostgreSQL: хранение состояния краулера.
+Утилиты для работы с PostgreSQL: хранение состояния краулера и RAG-данных.
 
 Храним:
 - таблица processed_articles: уникальные обработанные статьи (дедуп по link)
-- таблица crawler_feed_state: last_processed_published_at по каждому RSS-источнику
+- таблица last_published_at: last_processed_published_at по каждому RSS-источнику
+- таблица collections: логические RAG-коллекции (D/GA/A + имя)
+- таблица rag_documents: документы с эмбеддингами по коллекциям (pgvector)
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, TypedDict
+
+
+class CollectionRow(TypedDict, total=False):
+    """Строка таблицы collections (id, name, D/GA/A, collection_key, временные метки)."""
+    id: int
+    name: str
+    discipline: Optional[str]
+    ga: Optional[str]
+    activity: Optional[str]
+    collection_key: str
+    user_id: Optional[str]
+    team_id: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    last_refreshed_at: Optional[datetime]
 
 import pandas as pd
 import psycopg2
 from psycopg2.extras import DictCursor
 
 from config.config import (
+    EMBEDDING_DIM,
     POSTGRES_DB,
     POSTGRES_ENABLED,
     POSTGRES_HOST,
     POSTGRES_PASSWORD,
     POSTGRES_PORT,
+    POSTGRES_TABLE_COLLECTIONS,
     POSTGRES_TABLE_FEED_STATE,
     POSTGRES_TABLE_PROCESSED_ARTICLES,
+    POSTGRES_TABLE_RAG_DOCUMENTS,
     POSTGRES_USER,
 )
 
@@ -96,6 +116,298 @@ def ensure_tables(conn) -> None:
             );
             """
         )
+
+        # Таблица логических коллекций для RAG (selection D/GA/A + имя; одна пара = одна запись).
+        # Уникальность по (collection_key, name): один и тот же D/GA/A может иметь несколько коллекций с разными именами.
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE_COLLECTIONS} (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                discipline TEXT,
+                ga TEXT,
+                activity TEXT,
+                collection_key TEXT NOT NULL,
+                user_id TEXT,
+                team_id TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_refreshed_at TIMESTAMPTZ,
+                UNIQUE (collection_key, name)
+            );
+            """
+        )
+        # Миграция: если раньше был UNIQUE только по collection_key — убираем его, оставляем UNIQUE(collection_key, name).
+        try:
+            cur.execute(
+                f"ALTER TABLE {POSTGRES_TABLE_COLLECTIONS} DROP CONSTRAINT IF EXISTS {POSTGRES_TABLE_COLLECTIONS}_collection_key_key;"
+            )
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                f"""
+                ALTER TABLE {POSTGRES_TABLE_COLLECTIONS}
+                ADD CONSTRAINT {POSTGRES_TABLE_COLLECTIONS}_collection_key_name_key UNIQUE (collection_key, name);
+                """
+            )
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                f"""
+                CREATE INDEX IF NOT EXISTS idx_collections_user_created
+                ON {POSTGRES_TABLE_COLLECTIONS} (user_id, created_at DESC);
+                """
+            )
+        except Exception:
+            pass
+
+        # Расширение pgvector для векторного поиска (должно быть установлено в БД)
+        try:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+        except Exception as e:
+            logger.warning("Расширение pgvector недоступно: %s. Таблица rag_documents не будет создана.", e)
+        else:
+            # Таблица RAG-документов: одна строка — одна статья в одной коллекции.
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE_RAG_DOCUMENTS} (
+                    id BIGSERIAL PRIMARY KEY,
+                    collection_id INT NOT NULL REFERENCES {POSTGRES_TABLE_COLLECTIONS}(id) ON DELETE CASCADE,
+                    link TEXT NOT NULL,
+                    title TEXT,
+                    summary TEXT,
+                    source TEXT,
+                    published_at TIMESTAMPTZ,
+                    discipline TEXT,
+                    ga TEXT,
+                    activity TEXT,
+                    text_payload TEXT NOT NULL,
+                    embedding vector({EMBEDDING_DIM}),
+                    embed_similarity_to_topic REAL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (collection_id, link)
+                );
+                """
+            )
+            try:
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_published
+                    ON {POSTGRES_TABLE_RAG_DOCUMENTS} (collection_id, published_at DESC);
+                    """
+                )
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_id
+                    ON {POSTGRES_TABLE_RAG_DOCUMENTS} (collection_id);
+                    """
+                )
+            except Exception:
+                pass
+
+
+def build_collection_key(selection: Dict[str, Optional[str]]) -> str:
+    """
+    Строит уникальный ключ коллекции по selection (discipline, ga, activity).
+
+    Формат: "D1", "D1.GA1", "D1.GA1.A1". Null-уровни не включаются.
+    """
+    d = (selection.get("discipline") or "").strip()
+    g = (selection.get("ga") or "").strip()
+    a = (selection.get("activity") or "").strip()
+    parts = [d] if d else []
+    if g:
+        parts.append(g)
+    if a:
+        parts.append(a)
+    return ".".join(parts) if parts else ""
+
+
+def get_or_create_collection(
+    conn,
+    selection: Dict[str, Optional[str]],
+    taxonomy: Dict,
+    user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    collection_name: Optional[str] = None,
+) -> Optional[CollectionRow]:
+    """
+    Находит коллекцию по паре (collection_key, name) или создаёт новую.
+
+    Логика:
+    - Если запись с таким collection_key и именем уже есть — только обновляются
+      last_refreshed_at и updated_at (та же коллекция обновлена).
+    - Если такой пары нет (новое имя или новый selection) — создаётся новая запись.
+    Таким образом, один и тот же D/GA/A может иметь несколько коллекций с разными именами.
+
+    Returns:
+        Словарь с полями id, name, collection_key, ... или None при conn=None / пустом selection.
+    """
+    if conn is None:
+        return None
+    key = build_collection_key(selection)
+    if not key:
+        return None
+
+    if collection_name and collection_name.strip():
+        name = collection_name.strip()
+    else:
+        from src.taxonomy import get_collection_display_name
+        name = get_collection_display_name(taxonomy, selection)
+    discipline = selection.get("discipline")
+    ga = selection.get("ga")
+    activity = selection.get("activity")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                   created_at, updated_at, last_refreshed_at
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            WHERE collection_key = %s AND name = %s;
+            """,
+            (key, name),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                f"""
+                UPDATE {POSTGRES_TABLE_COLLECTIONS}
+                SET last_refreshed_at = NOW(), updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                          created_at, updated_at, last_refreshed_at;
+                """,
+                (row["id"],),
+            )
+            row = cur.fetchone()
+        else:
+            cur.execute(
+                f"""
+                INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
+                    (name, discipline, ga, activity, collection_key, user_id, team_id, updated_at, last_refreshed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                          created_at, updated_at, last_refreshed_at;
+                """,
+                (name, discipline, ga, activity, key, user_id, team_id),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "discipline": row["discipline"],
+        "ga": row["ga"],
+        "activity": row["activity"],
+        "collection_key": row["collection_key"],
+        "user_id": row["user_id"],
+        "team_id": row["team_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_refreshed_at": row["last_refreshed_at"],
+    }
+
+
+def update_collection_last_refreshed(conn, collection_id: int) -> None:
+    """Обновляет last_refreshed_at у коллекции после успешного прогона пайплайна."""
+    if conn is None or collection_id is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE {POSTGRES_TABLE_COLLECTIONS}
+            SET last_refreshed_at = NOW(), updated_at = NOW()
+            WHERE id = %s;
+            """,
+            (collection_id,),
+        )
+
+
+def _embedding_to_vector_str(embedding: List[float]) -> str:
+    """Формирует строку для вставки в колонку pgvector: '[0.1, 0.2, ...]'."""
+    return "[" + ",".join(str(float(x)) for x in embedding) + "]"
+
+
+def upsert_rag_documents(
+    conn,
+    collection_id: int,
+    discipline: Optional[str],
+    ga: Optional[str],
+    activity: Optional[str],
+    documents: List[Dict],
+) -> int:
+    """
+    Вставляет или обновляет RAG-документы в таблице rag_documents (upsert по collection_id + link).
+
+    Каждый элемент documents должен содержать: link, title, summary, source, published_at,
+    text_payload, embedding (список float), embed_similarity_to_topic (опционально).
+
+    Returns:
+        Количество обработанных строк (вставлено или обновлено).
+    """
+    if conn is None or not documents:
+        return 0
+    count = 0
+    with conn.cursor() as cur:
+        for doc in documents:
+            link = doc.get("link")
+            if not link:
+                continue
+            title = doc.get("title") or ""
+            summary = doc.get("summary") or ""
+            source = doc.get("source") or ""
+            published_at = doc.get("published_at")
+            text_payload = doc.get("text_payload") or ""
+            embedding = doc.get("embedding")
+            embed_sim = doc.get("embed_similarity_to_topic")
+            if embedding is not None:
+                emb_str = _embedding_to_vector_str(embedding)
+            else:
+                emb_str = None
+            cur.execute(
+                f"""
+                INSERT INTO {POSTGRES_TABLE_RAG_DOCUMENTS}
+                    (collection_id, link, title, summary, source, published_at,
+                     discipline, ga, activity, text_payload, embedding, embed_similarity_to_topic, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s, NOW())
+                ON CONFLICT (collection_id, link) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    summary = EXCLUDED.summary,
+                    source = EXCLUDED.source,
+                    published_at = EXCLUDED.published_at,
+                    discipline = EXCLUDED.discipline,
+                    ga = EXCLUDED.ga,
+                    activity = EXCLUDED.activity,
+                    text_payload = EXCLUDED.text_payload,
+                    embedding = EXCLUDED.embedding,
+                    embed_similarity_to_topic = EXCLUDED.embed_similarity_to_topic,
+                    updated_at = NOW();
+                """,
+                (
+                    collection_id,
+                    link,
+                    title,
+                    summary,
+                    source,
+                    published_at,
+                    discipline,
+                    ga,
+                    activity,
+                    text_payload,
+                    emb_str,
+                    embed_sim,
+                ),
+            )
+            count += 1
+    return count
 
 
 def load_processed_links(conn) -> Set[str]:

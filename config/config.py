@@ -142,17 +142,22 @@ DEFAULT_RELEVANCE_TEMPERATURE = 0.0  # Temperature для фильтрации �
 DEFAULT_LLM_SLEEP = 1.5  # Задержка между запросами к LLM (секунды)
 
 
-# PostgreSQL: конфигурация хранения состояния краулера
+# PostgreSQL: конфигурация хранения состояния краулера и RAG-данных
 POSTGRES_ENABLED = True  # Можно отключить БД, если она недоступна
 
 # Базовые параметры подключения (заполни под свою локальную БД)
 POSTGRES_HOST = "localhost"
 POSTGRES_PORT = 5432
-POSTGRES_DB = "postgres" 
-POSTGRES_USER = "macbookpro"  
-POSTGRES_PASSWORD = ""  
+POSTGRES_DB = "postgres"
+POSTGRES_USER = "macbookpro"
+POSTGRES_PASSWORD = ""
 
-# Имена таблиц для состояния краулера
+# Имена таблиц для состояния краулера и RAG-коллекций
 POSTGRES_TABLE_PROCESSED_ARTICLES = "processed_articles"
 POSTGRES_TABLE_FEED_STATE = "last_published_at"
+POSTGRES_TABLE_COLLECTIONS = "collections"
+POSTGRES_TABLE_RAG_DOCUMENTS = "rag_documents"
+
+# Размерность вектора эмбеддингов (paraphrase-multilingual-mpnet-base-v2 = 768)
+EMBEDDING_DIM = 768
 

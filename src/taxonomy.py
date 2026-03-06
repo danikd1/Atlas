@@ -178,6 +178,55 @@ def get_keywords_config_for_selection(
     }
 
 
+def get_collection_display_name(
+    taxonomy: Dict[str, Any],
+    selection: Optional[Dict[str, Optional[str]]] = None,
+) -> str:
+    """
+    Собирает отображаемое имя коллекции по selection из таксономии.
+
+    Формат: "D1 / GA1 / A1 — Имя активности" или "D1 / GA1 — Имя GA", "D1 — Имя дисциплины".
+
+    Args:
+        taxonomy: Загруженная таксономия (load_taxonomy).
+        selection: Словарь с ключами discipline, ga, activity.
+
+    Returns:
+        Строка для отображения в UI, например "D1 / GA1 / A1 — Определение границ MVP".
+    """
+    selection = selection or {}
+    discipline_id = selection.get("discipline")
+    ga_id = selection.get("ga")
+    activity_id = selection.get("activity")
+
+    parts: List[str] = []
+    name_suffix = ""
+
+    for d in taxonomy.get("disciplines") or []:
+        if d.get("id") != discipline_id:
+            continue
+        parts.append(f"{d['id']}")
+        name_suffix = d.get("name") or ""
+        if ga_id is not None:
+            for g in (d.get("groups") or []):
+                if g.get("id") != ga_id:
+                    continue
+                parts.append(f"{g['id']}")
+                name_suffix = g.get("name") or ""
+                if activity_id is not None:
+                    for a in (g.get("activities") or []):
+                        if a.get("id") == activity_id:
+                            parts.append(f"{a['id']}")
+                            name_suffix = a.get("name") or ""
+                            break
+                break
+        break
+
+    if not parts:
+        return "—"
+    return " / ".join(parts) + (" — " + name_suffix if name_suffix else "")
+
+
 def format_taxonomy_for_router_prompt(taxonomy: Dict[str, Any]) -> str:
     """
     Формирует блок «Предметная область» для системного промпта роутера из таксономии.

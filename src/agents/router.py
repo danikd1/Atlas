@@ -131,10 +131,49 @@ def router_output_to_taxonomy_selection(router_output: RouterState) -> Optional[
     sel = router_output.get("selection")
     if not sel:
         return None
+    discipline = sel.get("discipline")
+    ga = sel.get("ga")
+    activity = sel.get("activity")
+
+    # Если агент выбрал A, но не указал GA/discipline — доопределяем их по таксономии.
+    # Если указал GA, но не указал discipline — доопределяем discipline по таксономии.
+    if activity or ga:
+        taxonomy = load_taxonomy()
+        disciplines = taxonomy.get("disciplines") or []
+
+        # Сначала восстанавливаем GA и discipline по activity (если нужно)
+        if activity and not ga:
+            for d in disciplines:
+                for g in d.get("groups") or []:
+                    for a in g.get("activities") or []:
+                        if a.get("id") == activity:
+                            ga = g.get("id")
+                            if not discipline:
+                                discipline = d.get("id")
+                            break
+                    if ga:
+                        break
+                if ga:
+                    break
+
+        # Затем восстанавливаем discipline по GA (если нужно и всё ещё не определён)
+        if ga and not discipline:
+            for d in disciplines:
+                for g in d.get("groups") or []:
+                    if g.get("id") == ga:
+                        discipline = d.get("id")
+                        break
+                if discipline:
+                    break
+
+    # Если вообще ничего не выбрано (все None) — считаем, что выбора нет
+    if not (discipline or ga or activity):
+        return None
+
     return {
-        "discipline": sel.get("discipline"),
-        "ga": sel.get("ga"),
-        "activity": sel.get("activity"),
+        "discipline": discipline,
+        "ga": ga,
+        "activity": activity,
     }
 
 
