@@ -32,6 +32,8 @@ import pandas as pd
 import psycopg2
 from psycopg2.extras import DictCursor
 
+from src.tools.llm_utils import clean_text_for_llm
+
 from config.config import (
     EMBEDDING_DIM,
     POSTGRES_DB,
@@ -169,13 +171,15 @@ def ensure_tables(conn) -> None:
         except Exception as e:
             logger.warning("Расширение pgvector недоступно: %s. Таблица rag_documents не будет создана.", e)
         else:
-            # Таблица RAG-документов: одна строка — одна статья в одной коллекции.
+            # Таблица RAG-документов: одна строка — один чанк статьи в одной коллекции.
+            # Уникальность по (collection_id, link, chunk_index).
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE_RAG_DOCUMENTS} (
                     id BIGSERIAL PRIMARY KEY,
                     collection_id INT NOT NULL REFERENCES {POSTGRES_TABLE_COLLECTIONS}(id) ON DELETE CASCADE,
                     link TEXT NOT NULL,
+                    chunk_index INT NOT NULL DEFAULT 0,
                     title TEXT,
                     summary TEXT,
                     source TEXT,
@@ -188,10 +192,43 @@ def ensure_tables(conn) -> None:
                     embed_similarity_to_topic REAL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    UNIQUE (collection_id, link)
+                    UNIQUE (collection_id, link, chunk_index)
                 );
                 """
             )
+            # Миграция: добавить chunk_index если таблица создана по старой схеме
+            try:
+                cur.execute(
+                    f"""
+                    ALTER TABLE {POSTGRES_TABLE_RAG_DOCUMENTS}
+                    ADD COLUMN IF NOT EXISTS chunk_index INT NOT NULL DEFAULT 0;
+                    """
+                )
+            except Exception:
+                pass
+            # Заменить старый UNIQUE(collection_id, link) на UNIQUE(collection_id, link, chunk_index)
+            try:
+                cur.execute(
+                    f"ALTER TABLE {POSTGRES_TABLE_RAG_DOCUMENTS} DROP CONSTRAINT IF EXISTS {POSTGRES_TABLE_RAG_DOCUMENTS}_collection_id_link_key;"
+                )
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    f"""
+                    ALTER TABLE {POSTGRES_TABLE_RAG_DOCUMENTS}
+                    DROP CONSTRAINT IF EXISTS {POSTGRES_TABLE_RAG_DOCUMENTS}_collection_id_link_chunk_index_key;
+                    """
+                )
+                cur.execute(
+                    f"""
+                    ALTER TABLE {POSTGRES_TABLE_RAG_DOCUMENTS}
+                    ADD CONSTRAINT {POSTGRES_TABLE_RAG_DOCUMENTS}_collection_id_link_chunk_index_key
+                    UNIQUE (collection_id, link, chunk_index);
+                    """
+                )
+            except Exception:
+                pass
             try:
                 cur.execute(
                     f"""
@@ -336,6 +373,26 @@ def _embedding_to_vector_str(embedding: List[float]) -> str:
     return "[" + ",".join(str(float(x)) for x in embedding) + "]"
 
 
+def delete_rag_documents_by_links(conn, collection_id: int, links: Iterable[str]) -> None:
+    """
+    Удаляет из rag_documents все чанки статей с указанными link в данной коллекции.
+    Вызывать перед upsert при обновлении коллекции, чтобы убрать устаревшие чанки.
+    """
+    if conn is None or not links:
+        return
+    links_list = list(links)
+    if not links_list:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            DELETE FROM {POSTGRES_TABLE_RAG_DOCUMENTS}
+            WHERE collection_id = %s AND link = ANY(%s);
+            """,
+            (collection_id, links_list),
+        )
+
+
 def upsert_rag_documents(
     conn,
     collection_id: int,
@@ -345,10 +402,11 @@ def upsert_rag_documents(
     documents: List[Dict],
 ) -> int:
     """
-    Вставляет или обновляет RAG-документы в таблице rag_documents (upsert по collection_id + link).
+    Вставляет или обновляет RAG-документы (чанки) в таблице rag_documents.
+    Upsert по (collection_id, link, chunk_index).
 
-    Каждый элемент documents должен содержать: link, title, summary, source, published_at,
-    text_payload, embedding (список float), embed_similarity_to_topic (опционально).
+    Каждый элемент documents должен содержать: link, chunk_index, title, summary, source,
+    published_at, text_payload, embedding (список float), embed_similarity_to_topic (опционально).
 
     Returns:
         Количество обработанных строк (вставлено или обновлено).
@@ -361,6 +419,7 @@ def upsert_rag_documents(
             link = doc.get("link")
             if not link:
                 continue
+            chunk_index = int(doc.get("chunk_index", 0))
             title = doc.get("title") or ""
             summary = doc.get("summary") or ""
             source = doc.get("source") or ""
@@ -375,10 +434,10 @@ def upsert_rag_documents(
             cur.execute(
                 f"""
                 INSERT INTO {POSTGRES_TABLE_RAG_DOCUMENTS}
-                    (collection_id, link, title, summary, source, published_at,
+                    (collection_id, link, chunk_index, title, summary, source, published_at,
                      discipline, ga, activity, text_payload, embedding, embed_similarity_to_topic, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s, NOW())
-                ON CONFLICT (collection_id, link) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, %s, NOW())
+                ON CONFLICT (collection_id, link, chunk_index) DO UPDATE SET
                     title = EXCLUDED.title,
                     summary = EXCLUDED.summary,
                     source = EXCLUDED.source,
@@ -394,6 +453,7 @@ def upsert_rag_documents(
                 (
                     collection_id,
                     link,
+                    chunk_index,
                     title,
                     summary,
                     source,
@@ -532,13 +592,18 @@ def update_state_with_articles(conn, articles: Iterable[Dict]) -> None:
         return
 
     with conn.cursor() as cur:
-        # Вставка обработанных статей (игнорируем дубликаты по link)
+        # Вставка обработанных статей (игнорируем дубликаты по link).
+        # summary очищаем так же, как перед эмбеддингами, чтобы в БД сразу хранился тот текст,
+        # который примерно пойдет в модель (без HTML/шумов).
         for art in articles:
             source = art.get("source")
             link = art.get("link")
             published_dt = art.get("published_dt")
             title = art.get("title") or ""
-            summary = art.get("summary") or ""
+            raw_summary = art.get("summary") or ""
+            # Не ограничиваем длину при сохранении в БД, чтобы не терять информацию;
+            # clean_text_for_llm убирает HTML и нормализует пробелы.
+            summary = clean_text_for_llm(raw_summary, max_chars=None) if raw_summary else ""
 
             if not link or not source:
                 continue

@@ -90,11 +90,137 @@ RSS_FEEDS = {
     "technical_writing": "https://habr.com/ru/rss/hubs/technical_writing/articles/",
     "startuprise": "https://habr.com/ru/rss/hubs/startuprise/articles/",
     "terminator": "https://habr.com/ru/rss/hubs/terminator/articles/",
-    "community_management": "https://habr.com/ru/rss/hubs/community_management/articles/"
+    "community_management": "https://habr.com/ru/rss/hubs/community_management/articles/",
+
+    # "toptal1": "https://www.toptal.com/project-managers/blog.rss",
+    # "toptal2": "https://www.toptal.com/product-managers/blog.rss",
+    # "toptal3": "https://www.toptal.com/management-consultants/blog.rss",
+    # "toptal4": "https://www.toptal.com/developers/blog.rss",
+
+    # "Github Insights": "https://github.blog/news-insights/feed/",
+    # "Github AI & ML": "https://github.blog/ai-and-ml/feed/",
+    # "Github Developer skills": "https://github.blog/developer-skills/feed/",
+    # "Github Engineering": "https://github.blog/engineering/feed/",
+    # "Github Enterprise software": "https://github.blog/enterprise-software/feed/",
+    # "Github Open Source": "https://github.blog/open-source/feed/",
+    # "Github Security": "https://github.blog/security/feed/",
+    # "Github": "https://github.blog/feed/",
+    
+    # "OpenAI": "https://openai.com/news/rss.xml",
+
+    # "Google": "https://blog.google/rss/",
+    # "Google DeepMind": "https://deepmind.google/blog/rss.xml",
+    # "Google Research": "https://research.google/blog/rss/",
+    # "Google Developers": "https://developers.googleblog.com/feeds/posts/default/?alt=rss",
+    # "Google Cloud": "https://cloudblog.withgoogle.com/products/devops-sre/rss/",
+
+    # "Google Cloud ai-machine-learning": "https://cloudblog.withgoogle.com/products/ai-machine-learning/rss/",
+    # "Google Cloud api-management": "https://cloudblog.withgoogle.com/products/api-management/rss/",
+    # "Google Cloud Application Development": "https://cloudblog.withgoogle.com/products/application-development/rss/",
+    # "Google Cloud Application Modernization": "https://cloudblog.withgoogle.com/products/application-modernization/rss/",
+    # "Google Cloud Chrome Enterprise": "https://cloudblog.withgoogle.com/products/chrome-enterprise/rss/",
+    # "Google Cloud Compute": "https://cloudblog.withgoogle.com/products/compute/rss/",
+    # "Google Cloud Containers & Kubernetes": "https://cloudblog.withgoogle.com/products/containers-kubernetes/rss/",
+    # "Google Cloud Data Analytics": "https://cloudblog.withgoogle.com/products/data-analytics/rss/",
+    # "Google Cloud Databases": "https://cloudblog.withgoogle.com/products/databases/rss/",
+    # "Google Cloud DevOps & SRE": "https://cloudblog.withgoogle.com/products/devops-sre/rss/",
+    # "Google Cloud Threat Intelligence": "https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/",
+    # "Google Cloud Infrastructure": "https://cloudblog.withgoogle.com/products/infrastructure/rss/",
+    # "Google Cloud Infrastructure Modernization": "https://cloudblog.withgoogle.com/products/infrastructure-modernization/rss/",
+    # "Google Cloud Storage & Data Transfer": "https://cloudblog.withgoogle.com/products/storage-data-transfer/rss/",
+    # "Google Cloud Startups": "https://cloudblog.withgoogle.com/topics/startups/rss/",
+
+    # "Google workspace": "https://blog.google/products-and-platforms/products/workspace/rss/",
+    # "Google Ads & Commerce": "https://blog.google/products/ads-commerce/rss/",
+
+    # "Microsoft Azure Blog": "https://azure.microsoft.com/en-us/blog/feed/",
+    # "Microsoft Azure Blog AI Professionals": "https://azure.microsoft.com/en-us/blog/audience/ai-professionals/feed/",
+    # "Microsoft Azure Blog Business Decision Makers": "https://azure.microsoft.com/en-us/blog/audience/business-decision-makers/feed/",
+    # "Microsoft Azure Blog Data Professionals": "https://azure.microsoft.com/en-us/blog/audience/data-professionals/feed/",
+    # "Microsoft Azure Blog Developers": "https://azure.microsoft.com/en-us/blog/audience/developers/feed/",
+    # "Microsoft Azure Blog IT Decision Makers": "https://azure.microsoft.com/en-us/blog/audience/it-decision-makers/feed/",
+    # "Microsoft Azure Blog IT Implementors": "https://azure.microsoft.com/en-us/blog/audience/it-implementors/feed/",
+    # "Microsoft Azure Blogs Best Practices": "https://azure.microsoft.com/en-us/blog/content-type/best-practices/feed/",
+    # "Microsoft Azure Blogs Customer Stories": "https://azure.microsoft.com/en-us/blog/content-type/customer-stories/feed/",
+
+    # "AWS Blog Insights": "https://aws.amazon.com/ru/blogs/aws-insights/feed/",
+    # "AWS Blog AWS": "https://aws.amazon.com/ru/blogs/aws/feed/",
+    # "AWS Blog SMB": "https://aws.amazon.com/ru/blogs/smb/feed/",
+    # "AWS Blog Business Intelligence": "https://aws.amazon.com/ru/blogs/business-intelligence/feed/",
+    # "AWS Blog DevOps": "https://aws.amazon.com/ru/blogs/devops/feed/",
+    # "AWS Blog Infrastructure and Automation": "https://aws.amazon.com/ru/blogs/infrastructure-and-automation/feed/",
+    # "AWS Blog Open Source": "https://aws.amazon.com/ru/blogs/opensource/feed/",
+    # "AWS Blog Public Sector": "https://aws.amazon.com/ru/blogs/publicsector/feed/",
+    # "AWS Blog Russia": "https://aws.amazon.com/ru/blogs/rus/feed/",
+
+    # "MIT Technology Review": "https://www.technologyreview.com/feed",
+
+    # "Atlassian Communication": "https://www.atlassian.com/blog/communication/feed",
+    # "Atlassian Distributed Work": "https://www.atlassian.com/blog/distributed-work/feed",
+    # "Atlassian Leadership": "https://www.atlassian.com/blog/leadership/feed",
+    # "Atlassian Productivity": "https://www.atlassian.com/blog/productivity/feed",
+    # "Atlassian Strategy": "https://www.atlassian.com/blog/strategy/feed",
+    # "Atlassian Teamwork": "https://www.atlassian.com/blog/teamwork/feed",
+
+    # "Atlassian Add-ons": "https://www.atlassian.com/blog/add-ons/feed",
+    # "Atlassian Bitbucket": "https://www.atlassian.com/blog/bitbucket/feed",
+    # "Atlassian Crucible": "https://www.atlassian.com/blog/crucible/feed",
+    # "Atlassian Halp": "https://www.atlassian.com/blog/halp/feed",
+    # "Atlassian Access": "https://www.atlassian.com/blog/access/feed",
+    # "Atlassian Confluence": "https://www.atlassian.com/blog/confluence/feed",
+    # "Atlassian Fisheye": "https://www.atlassian.com/blog/fisheye/feed",
+    # "Atlassian Jira": "https://www.atlassian.com/blog/jira/feed",
+    # "Atlassian Bamboo": "https://www.atlassian.com/blog/bamboo/feed",
+    # "Atlassian Crowd": "https://www.atlassian.com/blog/crowd/feed",
+    # "Atlassian Focus": "https://www.atlassian.com/blog/focus/feed",
+    # "Atlassian Jira Align": "https://www.atlassian.com/blog/jira-align/feed",
+    # "Atlassian Jira Product Discovery": "https://www.atlassian.com/blog/jira-product-discovery/feed",
+    # "Atlassian Sourcetree": "https://www.atlassian.com/blog/sourcetree/feed",
+    # "Atlassian Jira Service Management": "https://www.atlassian.com/blog/jira-service-management/feed",
+    # "Atlassian Statuspage": "https://www.atlassian.com/blog/statuspage/feed",
+    # "Atlassian Loom": "https://www.atlassian.com/blog/loom/feed",
+    # "Atlassian Trello   ": "https://www.atlassian.com/blog/trello/feed",
+
+    # "Atlassian Artificial Intelligence": "https://www.atlassian.com/blog/artificial-intelligence/feed",
+    # "Atlassian Agile": "https://www.atlassian.com/blog/agile/feed",
+    # "Atlassian Atlassian Engineering": "https://www.atlassian.com/blog/atlassian-engineering/feed",
+    # "Atlassian Continuous Delivery": "https://www.atlassian.com/blog/continuous-delivery/feed",
+    # "Atlassian Design": "https://www.atlassian.com/blog/design/feed",
+    # "Atlassian Developer": "https://www.atlassian.com/blog/developer/feed",
+    # "Atlassian Devops": "https://www.atlassian.com/blog/devops/feed",
+    # "Atlassian Enterprise": "https://www.atlassian.com/blog/enterprise/feed",
+    # "Atlassian Git": "https://www.atlassian.com/blog/git/feed",
+    # "Atlassian It Service Management": "https://www.atlassian.com/blog/it-service-management/feed",
+    # "Atlassian Inside Atlassian": "https://www.atlassian.com/blog/inside-atlassian/feed",
+    # "Atlassian Project Management": "https://www.atlassian.com/blog/project-management/feed",
+    # "Atlassian Work Management": "https://www.atlassian.com/blog/work-management/feed",
+    # "Atlassian Announcements": "https://www.atlassian.com/blog/announcements/feed",
+
+    # "Slack Design": "https://slack.design/feed/",
+    # "Slack blog": "",
+
+    "GitLab Blog": "https://about.gitlab.com/atom.xml",
+    "GitLab Releases": "https://about.gitlab.com/releases.xml",
+
+    "Figma": "https://www.figma.com/blog/feed/atom.xml",
+
+    # "Яндекс Cloud": "https://yandex.cloud/ru/feed.atom",
+
+    "Сбербанк": "https://sberbs.ru/blogs/blog.atom",
+    
+    # "VK Tech": "",
+    # "Ozon Tech": "",
+    # "Wb Tech": "",
+    # "Raiffeisenbank": "",
+
 }
 
+# Источники, в которых в RSS в summary приходит полный текст статьи; обрезаем до SUMMARY_TRUNCATE_MAX_CHARS (~128 токенов)
+SUMMARY_TRUNCATE_SOURCE_PREFIXES = ("Google Cloud", "GitLab Blog", "Сбербанк",  "GitLab Releases")
+SUMMARY_TRUNCATE_MAX_CHARS = 512
+
 # Параметры по умолчанию
-DEFAULT_HOURS_BACK = 72
+DEFAULT_HOURS_BACK = 87600
 DEFAULT_LIMIT_PER_FEED = 30
 DEFAULT_RSS_TIMEOUT = 30  # секунд
 DEFAULT_MAX_RETRIES = 3
@@ -113,8 +239,8 @@ GENERIC_SINGLE_LEMMAS = {
 # Пример: {"discipline": "D1", "ga": "GA2", "activity": "A5"} или только {"discipline": "D1", "ga": None, "activity": None}.
 TAXONOMY_SELECTION = {
     "discipline": "D1",
-    "ga": "GA1",
-    "activity": "A1",
+    "ga": None,
+    "activity": None,
 }
 
 # Эмбеддинги: параметры фильтрации
@@ -160,4 +286,8 @@ POSTGRES_TABLE_RAG_DOCUMENTS = "rag_documents"
 
 # Размерность вектора эмбеддингов (paraphrase-multilingual-mpnet-base-v2 = 768)
 EMBEDDING_DIM = 768
+
+# RAG-чанкирование: размер чанка и перекрытие (в токенах)
+RAG_CHUNK_MAX_TOKENS = 128
+RAG_CHUNK_OVERLAP_TOKENS = 50
 

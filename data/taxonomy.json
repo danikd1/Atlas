@@ -4,134 +4,277 @@
   "disciplines": [
     {
       "id": "D1",
-      "name": "Работа с идеями и планирование",
-      "keywords": [],
-      "topic_descriptions": [],
+      "name": "Работа с идеями и исследование",
+      "keywords": ["AI use case", "use case prioritization", "optimal solution", "choose initiatives", "defining a problem", "validating your ideas",
+      "hypothesis testing", "no-code MVP", "customer pain points", "product idea", "worth creating", "use research", "constant calibration", "user preferences", 
+      "MVP scope", "brainstorm features", "test a new idea", "expand opportunity", "AI capability gaps", "AI value models", "business advantage", "process reinvention",
+      "financial data integrations", "modeling and analysis", "regulated environments", "business advantage", "AI progress", 
+      "AI research system", "model evaluation", "investment analysis", "learning outcomes", "measurement suite", "assess AI impact",
+      "new benchmark", "evaluating agents", "AI innovation", "AI discovery", "AI-powered science", "science and education", "accelerating discovery",
+      "scientific discovery", "mathematical discovery", "clinical study", "real-world study", "feasibility", 
+      "simulating conversations", "testing interactions", "randomized study", "real-world care", "new benchmark", "auditory intelligence",
+      "health ideathon", "spotlight on innovation", "high value", "platform adoption", "meaningful metrics", "monitoring metrics", "qualitative data", "survey responses",
+      "experiments evaluating", "BIRD benchmark", "research report", "global survey", "new research", "survey findings", "decision makers",
+      "minimum viable product", "real user feedback", "product discovery", "conversational commerce", "employee surveys", "evaluation datasets", "real-world feedback", "LLM judges",
+      "user research", "customer interviews","hypothesis testing","concept testing","market validation","competitive analysis","feasibility study",
+      "pilot study","MVP validation","validating your ideas", "feedback loop", "pushing the edges", "prototype their way", "pressure-testing assumptions", "build momentum",
+      "Customer Satisfaction", "CSI", "удовлетворенности клиентов", "мнения покупателей", "поведение покупателя", "потребительское поведение",
+      "SWOT-анализ", "точки роста", "клиентский опыт", "CX метрики"
+    ],
+      "topic_descriptions": ["Materials about the early stages of product development focused on idea discovery, problem exploration, and research. This topic includes articles on identifying user and market needs, discovering opportunities, framing product problems, and shaping initial product ideas. It also covers methods and practices for product discovery, customer and user research, hypothesis validation, competitor and market analysis, customer development, interviews, MVP validation, and finding product-market fit. Relevant materials often discuss frameworks and methods such as JTBD, Opportunity Solution Tree, Value Proposition Canvas, Design Thinking, CustDev, MVP, PoC, PMF, problem interviews, solution interviews, usability testing, and other research or validation approaches used before full-scale design and development."],
       "groups": [
         {
           "id": "GA1",
-          "name": "Формирование и структурирование решения",
-          "keywords": [],
+          "name": "Lean startup",
+          "keywords": ["defining a problem", "validating your ideas", "Lean methodology", "building a startup" ],
           "topic_descriptions": [],
           "activities": [
-            {
-              "id": "A1",
-              "name": "Определение границ MVP",
-              "example_queries": ["как определить границы MVP", "что включить в MVP", "границы первой версии продукта"],
-              "topic_descriptions": ["Материалы о формировании границ MVP, определении состава первой версии продукта, выборе функционала на основе баланса ценности, сложности и ресурсных ограничений, а также проверке продуктовых гипотез."],
-              "keywords": [
-                "Границы MVP",
-                "MVP boundaries",
-                "Минимум функций",
-                "Minimum features",
-                "Первая версия",
-                "First version",
-                "Тестирование гипотез",
-                "Hypothesis testing",
-                "Обратная связь",
-                "Feedback",
-                "Пользовательское исследование",
-                "User research",
-                "Целевой продукт",
-                "Target product",
-                "Ранняя проверка",
-                "Early validation",
-                "Требования MVP",
-                "MVP requirements",
-                "Важность фич",
-                "Feature importance",
-                "Сложность фич",
-                "Feature complexity",
-                "Последовательность фич",
-                "Features sequence",
-                "Критические фичи",
-                "Critical features",
-                "Продуктовая концепция",
-                "Product concept",
-                "Ценности продукта",
-                "Product value",
-                "Временные рамки",
-                "Timeframe",
-                "Ресурсные ограничения",
-                "Resource constraints",
-                "Аналитическая матрица",
-                "Analytical matrix",
-                "Ограниченные ресурсы",
-                "Limited resources",
-                "Простота проверки",
-                "Ease of validation",
-                "Первичная гипотеза",
-                "Primary hypothesis"
-              ]
-            },
-            {
-              "id": "A2",
-              "name": "Формирование первичного бэклога",
-              "example_queries": ["навыки Product Owner", "первичный бэклог", "с чего начать бэклог"],
-              "topic_descriptions": ["Материалы о создании и структурировании первичного бэклога, использовании Story Mapping, формировании карточек требований и организации работы Product Owner с системами Jira и Confluence."],
-              "keywords": [
-                "Первичный бэклог",
-                "Initial Backlog",
-                "Story Mapping",
-                "Карточка требований",
-                "Requirement Card",
-                "Владелец продукта",
-                "Product Owner",
-                "Представитель команды",
-                "Team Representative",
-                "Jira",
-                "Confluence",
-                "Требования",
-                "Requirements",
-                "Функциональные возможности",
-                "Functional Capabilities",
-                "Внутренний пользователь",
-                "Internal User",
-                "Внешний пользователь",
-                "External User",
-                "Служба безопасности",
-                "Security Department",
-                "Отдел Инфраструктуры",
-                "Infrastructure Department",
-                "Командуемые участники",
-                "Stakeholders",
-                "Элементы бэклога",
-                "Backlog Items",
-                "Согласование",
-                "Approval",
-                "Декомпозиция требований",
-                "Requirement Decomposition",
-                "Интересованные лица",
-                "Interested Parties",
-                "Заполнение карточки",
-                "Card Filling",
-                "Организация хранения бэклога",
-                "Backlog Storage Organization"
-              ]
-            },
-            { "id": "A3", "name": "ФО", "example_queries": ["управление ФО", "как описать ФО", "работа с функциональными особенностями"], "topic_descriptions": [], "keywords": [] },
-            { "id": "A4", "name": "реестр ФО", "example_queries": ["реестр ФО", "как вести реестр функциональных особенностей", "каталог ФО"], "topic_descriptions": [], "keywords": [] }
+            { "id": "A1", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A2", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A3", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A4", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] }
           ]
         },
         {
           "id": "GA2",
-          "name": "Исследование и проверка гипотез",
-          "keywords": [],
+          "name": "MVP",
+          "keywords": ["no-code MVP", "hypothesis testing", "startup product", "reduced cost"  ],
           "topic_descriptions": [],
-          "activities": [
-            { "id": "A5", "name": "UX-исследования", "example_queries": ["провести UX-исследование", "как исследовать пользователей", "юзабилити-тестирование"], "topic_descriptions": [], "keywords": [] },
-            { "id": "A6", "name": "A/B-тесты", "example_queries": ["провести A/B-тест", "как настроить A/B-тестирование", "проверка гипотезы экспериментом"], "topic_descriptions": [], "keywords": [] }
-          ]
+          "activities": []
         },
         {
           "id": "GA3",
-          "name": "Инструментальная поддержка исследований",
-          "keywords": [],
+          "name": "Customer Research",
+          "keywords": ["customer pain points", "product idea", "worth creating", "will it sell"],
           "topic_descriptions": [],
+          "activities": []
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "name": "Планирование",
+      "keywords": ["strategic questions", "specific audiences", "team trust", "project management", "project management", "project use cases", "best practices", "technology limitations",
+    "resource allocation", "right people", "right tasks", "project management","AI applications", "project outcomes", "AI tools", "key benefits",
+    "critical chain", "extra planning", "few resources", "Agile project", "soft skills", "build a team", "gain trust", "positive culture",
+    "conflict resolution", "improving communication", "touch points", "project delivery", "product owner", "role confusion", "project manager", "both arenas",
+    "product strategy", "AI integration", "successful integration", "product businesses", "requirements gathering", "development process", "ineffective approaches", "meaningful ways",
+    "product-led growth", "growth frameworks", "SaaS companies", "build your business", "product-led growth", "growth culture", "aligned teams", "customer experience",
+    "first-party data", "data strategy", "customer relationships", "revenue potential", "product manager", "product owner", "numerous roles", "business need",
+     "product vision", "AI product strategy", "planning guide", "AI products", "build teams", "AI product management", "AI tech", "AI product market", "fast-moving field",
+"risk management", "Agile ecosystem", "risk aversion", "uncertain times", "risk management", "Agile ecosystem", "risk aversion", "uncertain times", "user story", "efficient planning", "on-time delivery", "customer satisfaction",
+"digital product development", "PRD", "best practices", "product development", "growth product", "growth product managers", "product role", "what value", 
+"big data", "data-driven product", "product issues", "drive results", "AI in finance", "opportunities and challenges", "drive productivity", "customer satisfaction", 
+"optimizing profit", "four-step approach", "grow opportunities", "boost margins", "business controls", "manage risk", "checks and balances", "positioning growth",
+"validating your ideas", "strategic leadership", "drive growth", "plan future", "technology insights", "quantitative forecasting", "early-stage startups", "financial projections", "historical data",
+"data analytics", "digital banking", "step-by-step plan", "customer satisfaction", "pricing strategy", "outside-the-box", "optimizing pricing", "high inflation", "responsible AI", "code of ethics", "algorithmic bias", "data ownership"
+
+
+
+
+   ],
+      "topic_descriptions": [""],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "Jira",
+          "keywords": [],
+          "topic_descriptions": ["Jira integration", "Monday.com integration", "native approaches", "custom approaches", "Jira workflows", "best practices", "managing projects", "workflow setup"
+         ],
           "activities": [
-            { "id": "A7", "name": "discovery-инструменты / AI", "example_queries": ["инструменты для discovery", "AI для исследований", "discovery и AI"], "topic_descriptions": [], "keywords": [] },
-            { "id": "A8", "name": "рекрутинг", "example_queries": ["как набрать респондентов", "рекрутинг для исследований", "поиск участников интервью"], "topic_descriptions": [], "keywords": [] }
+            { "id": "A1", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A2", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A3", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
+            { "id": "A4", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] }
           ]
+        },
+        {
+          "id": "GA2",
+          "name": "Agile",
+          "keywords": ["hybrid approach", "Agile and Waterfall", "project management", "implement approach",
+           "Lean Agile", "Scrum Kanban", "project management", "software development","Agile Waterfall", "hybrid methodology", "software development", "resolving conflict",
+           "Agile philosophy", "Agile applications", "prioritize values", "through practice" ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA3",
+          "name": "Kanban",
+          "keywords": ["Kanban evolution", "remote teams", "distributed teams", "valuable lessons" ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA4",
+          "name": "Estimation",
+          "keywords": ["discovery estimation", "Agile spreadsheet", "estimation tools", "calculate estimates", "estimation techniques", "Agile project", "rank backlog", "project delivery"
+        ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA5",
+          "name": "Budgeting",
+          "keywords": ["Agile budgeting", "budget planning", "forecasting tips", "on budget"],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA6",
+          "name": "Product Strategy",
+          "keywords": ["product strategy", "e-commerce product", "expert insights", "strong strategy"  ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA7",
+          "name": "Roadmap",
+          "keywords": ["product roadmap", "stakeholder intervention", "data-driven decision", "senior stakeholders", "strategic roadmaps", "tactical roadmaps", "product development", "product owner"
+          ]
+,          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA8",
+          "name": "MVP",
+          "keywords": ["MVP scope", "brainstorm features", "pare them down", "create wireframes"],
+          "topic_descriptions": [],
+          "activities": []
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "name": "Проектирование",
+      "keywords": ["software development", "product leadership", "security design", "fintech product", "complex industry", "embrace innovation", "reliable gateways", 
+    "data labeling architecture", "machine learning pipelines", "workflow security", "data quality", "pipeline architecture", "video processing", "reusable foundation", "computer vision",
+  "design patterns", "React patterns", "coherent modules", "less coupling"],
+      "topic_descriptions": [],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "API",
+          "keywords": ["REST API", "API principles", "API management", "API strategy", "API governance", "gRPC vs REST", "API framework", "performance trade-offs", "use cases"
+         ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA2",
+          "name": "UX",
+          "keywords": ["UX friction", "data security", "user preferences", "constant calibration" ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA3",
+          "name": "Design sprint",
+          "keywords": ["design sprints", "creative constraints", "product managers", "structure and chaos" ],
+          "topic_descriptions": [],
+          "activities": []
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "name": "Разработка",
+      "keywords": ["Shopify tools", "e-commerce development", "developer tools", "development workflow", "data labeling", "labeling teams", "robust datasets", "machine learning",
+    "fine-tuning LLMs", "data labeling", "domain-specific data", "training GPT-4o", "data labeling", "labeling methods", "hybrid approaches", "accuracy efficiency",
+    "developer productivity", "generative AI", "write code", "daily work", "LLM API", "Python development", "coding assistants", "external API", "DevSecOps", "cloud security", "security checks", "compliance frameworks",
+    "image labeling", "semantic metadata", "large data", "automate labeling", "JWT authentication", "GraphQL", "front end", "back end", "page speed", "server-side rendering", "reduced server load", "web apps",
+    "AI cybersecurity", "network protection", "data protection", "best practices", "image generation", "GPT models", "diffusion models", "tutorial basics" 
+  ],
+      "topic_descriptions": [],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "Kanban",
+          "keywords": ["Kanban practices", "context switching", "cognitive load", "code quality"],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA2",
+          "name": "Scrum",
+          "keywords": ["Scrum master", "best practices", "servant leader", "avoidable mistakes", "Scrum master", "leadership skills", "growth path", "transformation expert"
+        ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA3",
+          "name": "Low-code",
+          "keywords": ["citizen development", "low-code platform", "fast delivery", "talent shortages" ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA4",
+          "name": "Agile",
+          "keywords": ["Agile retrospectives", "remote retrospectives", "videoconferencing practices", "successful retros"  ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA5",
+          "name": "Logging",
+          "keywords": ["logging handlers", "structured logging", "logging pipelines", "best practices"
+        ],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA6",
+          "name": "Spark",
+          "keywords": ["Spark optimization", "data processing", "high performance", "PySpark" ],
+          "topic_descriptions": [],
+          "activities": []
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "name": "Тестирование",
+      "keywords": ["testing RESTful API", "RESTful API", "secure API", "best practices" ],
+      "topic_descriptions": [],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "QA",
+          "keywords": ["AI in QA", "code reviews", "software quality", "quality software", "QA techniques", "software development", "higher-quality products", "product development"
+        ],
+          "topic_descriptions": [],
+          "activities": []
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "name": "Внедрение",
+      "keywords": ["SaaS implementation", "introduction of tools", "implementation tips", "implementation success", 
+    "change management", "organizational structure", "new process", "new tool","implementing a PMO", "smooth launch", "PMO strategy", "steps to success", 
+    "AI product", "implementation framework", "manage teams", "product launch", "launch strategy", "release fast", "timing strategy", "strategic direction", "leadership transitions", "maintain continuity", "long-term success",
+    "enterprise interfaces", "operational efficiency", "Gen AI", "customer support", "IT integration", "integration strategy", "M&A", "desired benefits", 
+    "international expansion", "overseas branch", "cross-border contractors", "financial guide", "sales and operations", "S&OP", "implementation", "long-term business plan",
+    "precision healthcare", "data-driven diagnostics", "personalized patient care", "medical imaging"
+
+   ],
+      "topic_descriptions": [],
+      "groups": [
+        {
+          "id": "GA1",
+          "name": "SAFe",
+          "keywords": ["SAFe case studies", "Agile scaling", "implementing framework", "transformation notes", "Agile scaling",
+           "SAFe practices", "release train engineer", "team expansion", "Agile scaling", "scaling frameworks", "team expansion", "best choice"],
+          "topic_descriptions": [],
+          "activities": []
+        },
+        {
+          "id": "GA2",
+          "name": "Agile",
+          "keywords": ["Agile transformations", "organizational change", "leaders resist", "sustainable agility" ],
+          "topic_descriptions": [],
+          "activities": []
         }
       ]
     }

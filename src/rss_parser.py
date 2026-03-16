@@ -9,6 +9,7 @@
 """
 import calendar
 import logging
+import re
 import socket
 import time
 from datetime import datetime, timedelta, timezone
@@ -73,6 +74,31 @@ def validate_and_deduplicate_feeds(rss_feeds: Dict[str, str]) -> Dict[str, str]:
         cleaned_feeds[name] = url.strip()
     
     return cleaned_feeds
+
+
+# Шаблон в конце summary у части лент (GitHub Blog, Microsoft Azure Blog, Atlassian, Slack и др.):
+# "The post\n[заголовок]\nappeared first on\n[название блога]." — убираем, чтобы не дублировать заголовок и не засорять БД.
+# \s* перед "The post" — в HTML может не быть пробела (например </p><p>The post).
+_RE_STRIP_APPEARED_FIRST = re.compile(
+    r"\s*The post\s+.+?appeared first on\s+.+$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_appeared_first_on(summary: str) -> str:
+    """
+    Удаляет из конца summary шаблон «The post ... appeared first on ...».
+    Сначала regex; если не сработал — обрезаем по фразе " appeared first on ".
+    """
+    if not summary or not isinstance(summary, str):
+        return summary or ""
+    s = summary.strip()
+    cleaned = _RE_STRIP_APPEARED_FIRST.sub("", s).strip()
+    if cleaned != s:
+        return cleaned or s
+    if " appeared first on " in s:
+        return s.split(" appeared first on ")[0].strip() or s
+    return s
 
 
 def parse_rss(
@@ -176,7 +202,7 @@ def parse_rss(
                     title = entry.get("title", "")
                     link = entry.get("link", "").strip()
                     published = entry.get("published", "—")
-                    summary = entry.get("summary", "Без описания")
+                    summary = strip_appeared_first_on(entry.get("summary", "Без описания"))
                     
                     # Валидация обязательных полей
                     if not title or not link:
@@ -245,8 +271,10 @@ def collect_articles_for_window(
     """
     # Импорт конфига только если нужно
     if rss_feeds is None:
-        from config.config import RSS_FEEDS
+        from config.config import RSS_FEEDS, SUMMARY_TRUNCATE_MAX_CHARS, SUMMARY_TRUNCATE_SOURCE_PREFIXES
         rss_feeds = RSS_FEEDS
+    else:
+        from config.config import SUMMARY_TRUNCATE_MAX_CHARS, SUMMARY_TRUNCATE_SOURCE_PREFIXES
     
     # Валидация и обработка дубликатов
     rss_feeds = validate_and_deduplicate_feeds(rss_feeds)
@@ -317,6 +345,14 @@ def collect_articles_for_window(
 
                 # Добавляем имя источника (ключ из RSS_FEEDS), чтобы можно было хранить состояние по каждому источнику
                 art["source"] = name
+
+                # У части лент в summary приходит полный текст статьи — обрезаем до SUMMARY_TRUNCATE_MAX_CHARS
+                if SUMMARY_TRUNCATE_SOURCE_PREFIXES and any(
+                    name.startswith(p) for p in SUMMARY_TRUNCATE_SOURCE_PREFIXES
+                ):
+                    s = (art.get("summary") or "")
+                    if len(s) > SUMMARY_TRUNCATE_MAX_CHARS:
+                        art["summary"] = s[:SUMMARY_TRUNCATE_MAX_CHARS].strip()
 
                 if link in seen_links:
                     skipped_duplicates += 1
