@@ -319,6 +319,9 @@ def collect_articles_for_window(
                     f"Источник '{name}': используем last_processed_published_at = {min_published_dt}"
                 )
             
+            # Временный лог, чтобы видеть, на какой ленте может происходить «зависание»
+            logger.info("Парсинг RSS-ленты '%s' (%s)...", name, url)
+
             articles = parse_rss(
                 url,
                 limit=limit_per_feed,

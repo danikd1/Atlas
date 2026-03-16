@@ -47,7 +47,7 @@ def _resolve_taxonomy_selection(override: Optional[dict] = None) -> dict:
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.WARNING,  # Только предупреждения и ошибки
+    level=logging.INFO,  # Только предупреждения и ошибки
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
