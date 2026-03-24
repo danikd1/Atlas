@@ -68,19 +68,14 @@
 "optimizing profit", "four-step approach", "grow opportunities", "boost margins", "business controls", "manage risk", "checks and balances", "positioning growth",
 "validating your ideas", "strategic leadership", "drive growth", "plan future", "technology insights", "quantitative forecasting", "early-stage startups", "financial projections", "historical data",
 "data analytics", "digital banking", "step-by-step plan", "customer satisfaction", "pricing strategy", "outside-the-box", "optimizing pricing", "high inflation", "responsible AI", "code of ethics", "algorithmic bias", "data ownership"
-
-
-
-
    ],
       "topic_descriptions": ["Materials about planning and steering product and project work: defining product vision and strategy, setting goals and success metrics, prioritizing initiatives, and translating strategy into concrete roadmaps and delivery plans. This topic includes articles on portfolio planning, project and program management, choosing the right methodology (Agile, Kanban, hybrid, Waterfall + Agile), organizing backlogs, aligning teams around shared objectives, and coordinating stakeholders and communication."],
       "groups": [
         {
           "id": "GA1",
           "name": "Jira",
-          "keywords": [],
-          "topic_descriptions": ["Jira integration", "Monday.com integration", "native approaches", "custom approaches", "Jira workflows", "best practices", "managing projects", "workflow setup"
-         ],
+          "keywords": ["Jira integration", "Monday.com integration", "native approaches", "custom approaches", "Jira workflows", "best practices", "managing projects", "workflow setup"],
+          "topic_descriptions": ["Materials about using Jira, Atlassian tools, and related project management software for planning and execution. This topic includes articles on Jira workflows, board setup, sprint configuration, issue types and custom fields, native and custom integrations, best practices for managing projects in Jira, workflow automation, and connecting Jira to other tools in the development and planning process."],
           "activities": [
             { "id": "A1", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
             { "id": "A2", "name": "", "example_queries": [], "topic_descriptions": [], "keywords": [] },
@@ -94,14 +89,14 @@
           "keywords": ["hybrid approach", "Agile and Waterfall", "project management", "implement approach",
            "Lean Agile", "Scrum Kanban", "project management", "software development","Agile Waterfall", "hybrid methodology", "software development", "resolving conflict",
            "Agile philosophy", "Agile applications", "prioritize values", "through practice" ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about Agile methodology, values, and practices in planning and project management. This topic includes articles on implementing Agile in teams, Agile philosophy and principles, applying Agile to software development, resolving conflicts in Agile teams, prioritizing Agile values, and putting Agile into practice in organizations."],
           "activities": []
         },
         {
           "id": "GA3",
           "name": "Kanban",
           "keywords": ["Kanban evolution", "remote teams", "distributed teams", "valuable lessons" ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about Kanban for planning and flow-based work. This topic includes articles on Kanban boards, WIP limits, flow efficiency, evolving Kanban practices, using Kanban with remote and distributed teams, lessons learned from Kanban adoption, and Kanban in project delivery and planning contexts."],
           "activities": []
         },
         {
@@ -109,21 +104,21 @@
           "name": "Estimation",
           "keywords": ["discovery estimation", "Agile spreadsheet", "estimation tools", "calculate estimates", "estimation techniques", "Agile project", "rank backlog", "project delivery"
         ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about estimating work in Agile and project contexts. This topic includes articles on discovery estimation, estimation techniques such as story points and planning poker, estimation tools and spreadsheets, calculating and refining estimates, ranking and sizing backlog items, Agile estimation practices, and improving project delivery through better estimation."],
           "activities": []
         },
         {
           "id": "GA5",
           "name": "Budgeting",
           "keywords": ["Agile budgeting", "budget planning", "forecasting tips", "on budget"],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about budgeting and financial planning in Agile and project contexts. This topic includes articles on Agile budgeting, budget planning, forecasting tips, staying on budget, funding iterations or value streams, and aligning financial planning with Agile delivery and project outcomes."],
           "activities": []
         },
         {
           "id": "GA6",
           "name": "Product Strategy",
           "keywords": ["product strategy", "e-commerce product", "expert insights", "strong strategy"  ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about defining and executing product strategy. This topic includes articles on product strategy frameworks, e-commerce and digital product strategy, expert insights on building a strong strategy, positioning, growth strategy, and linking strategy to roadmap and execution."],
           "activities": []
         },
         {
@@ -131,14 +126,14 @@
           "name": "Roadmap",
           "keywords": ["product roadmap", "stakeholder intervention", "data-driven decision", "senior stakeholders", "strategic roadmaps", "tactical roadmaps", "product development", "product owner"
           ]
-,          "topic_descriptions": [],
+,          "topic_descriptions": ["Materials about product and project roadmaps. This topic includes articles on strategic vs tactical roadmaps, roadmap planning and prioritization, stakeholder alignment and stakeholder intervention, data-driven roadmap decisions, working with senior stakeholders, the product owner role in roadmaps, and connecting roadmaps to product development and delivery."],
           "activities": []
         },
         {
           "id": "GA8",
           "name": "MVP",
           "keywords": ["MVP scope", "brainstorm features", "pare them down", "create wireframes"],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about scoping and planning an MVP within the planning phase. This topic includes articles on defining MVP scope, brainstorming and trimming features for an MVP, prioritization for minimum viable product, wireframes and early design in planning, and deciding what to build first to validate with users."],
           "activities": []
         }
       ]
@@ -154,9 +149,9 @@
         {
           "id": "GA1",
           "name": "API",
-          "keywords": ["REST API", "API principles", "API management", "API strategy", "API governance", "gRPC vs REST", "API framework", "performance trade-offs", "use cases"
+          "keywords": ["API", "REST API", "API principles", "API management", "API strategy", "API governance", "gRPC vs REST", "API framework", "performance trade-offs", "use cases"
          ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about API design and management in software and product contexts. This topic includes articles on API principles, REST vs gRPC, API frameworks, performance trade-offs, API governance, API strategy, API management, API security, API documentation, API testing, API monitoring, and API integration with other systems and services."],
           "activities": []
         },
         {
@@ -184,13 +179,13 @@
     "image labeling", "semantic metadata", "large data", "automate labeling", "JWT authentication", "GraphQL", "front end", "back end", "page speed", "server-side rendering", "reduced server load", "web apps",
     "AI cybersecurity", "network protection", "data protection", "best practices", "image generation", "GPT models", "diffusion models", "tutorial basics" 
   ],
-      "topic_descriptions": [],
+      "topic_descriptions": ["Materials about software and product development: coding practices, development workflow, developer tools, and delivery. This topic includes articles on front-end and back-end development, e-commerce and web apps, data labeling and ML pipelines, fine-tuning LLMs, developer productivity, coding assistants, APIs (REST, GraphQL, JWT), DevSecOps and security, logging and observability, and data processing (e.g. Spark). It also covers process and methodology in development such as Kanban, Scrum, Agile retrospectives, and low-code or citizen development."],
       "groups": [
         {
           "id": "GA1",
           "name": "Kanban",
           "keywords": ["Kanban practices", "context switching", "cognitive load", "code quality"],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about applying Kanban in software development. This topic includes articles on Kanban practices for development teams, reducing context switching and cognitive load, improving code quality through flow and WIP limits, and using Kanban boards and metrics in day-to-day development work."],
           "activities": []
         },
         {
@@ -198,21 +193,21 @@
           "name": "Scrum",
           "keywords": ["Scrum master", "best practices", "servant leader", "avoidable mistakes", "Scrum master", "leadership skills", "growth path", "transformation expert"
         ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about the Scrum master role and Scrum in development. This topic includes articles on Scrum master best practices, servant leadership, avoidable mistakes, leadership skills for Scrum masters, growth path and career development, and becoming a transformation expert in Agile and Scrum contexts."],
           "activities": []
         },
         {
           "id": "GA3",
           "name": "Low-code",
           "keywords": ["citizen development", "low-code platform", "fast delivery", "talent shortages" ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about low-code development and citizen development. This topic includes articles on low-code platforms, building solutions with minimal coding, citizen developers, fast delivery with low-code, addressing talent shortages through low-code, and when to choose low-code vs traditional development."],
           "activities": []
         },
         {
           "id": "GA4",
           "name": "Agile",
           "keywords": ["Agile retrospectives", "remote retrospectives", "videoconferencing practices", "successful retros"  ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about Agile practices in development, with focus on retrospectives. This topic includes articles on running Agile retrospectives, remote and distributed retrospectives, videoconferencing practices for retros, and tips for successful and effective retrospectives in development teams."],
           "activities": []
         },
         {
@@ -220,14 +215,14 @@
           "name": "Logging",
           "keywords": ["logging handlers", "structured logging", "logging pipelines", "best practices"
         ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about logging in software development and operations. This topic includes articles on logging handlers, structured logging formats and practices, building logging pipelines, log aggregation and analysis, and best practices for logging in production and development environments."],
           "activities": []
         },
         {
           "id": "GA6",
           "name": "Spark",
           "keywords": ["Spark optimization", "data processing", "high performance", "PySpark" ],
-          "topic_descriptions": [],
+          "topic_descriptions": ["Materials about Apache Spark for data processing and development. This topic includes articles on Spark optimization, tuning performance, high-performance data pipelines, PySpark development, Spark architecture and best practices, and processing large-scale data with Spark."],
           "activities": []
         }
       ]

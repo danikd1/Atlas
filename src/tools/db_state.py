@@ -368,6 +368,68 @@ def update_collection_last_refreshed(conn, collection_id: int) -> None:
         )
 
 
+def list_collections(conn) -> List[CollectionRow]:
+    """
+    Возвращает список всех коллекций (для UI и API).
+    Сортировка по updated_at по убыванию.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                   created_at, updated_at, last_refreshed_at
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            ORDER BY updated_at DESC NULLS LAST, id DESC;
+            """,
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_collection_by_id(conn, collection_id: int) -> Optional[CollectionRow]:
+    """Возвращает одну коллекцию по id или None."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                   created_at, updated_at, last_refreshed_at
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            WHERE id = %s;
+            """,
+            (collection_id,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def get_articles_for_collection(
+    conn,
+    collection_id: int,
+) -> List[Dict]:
+    """
+    Возвращает список статей коллекции из rag_documents: одна запись на статью (по link).
+    Поля: link, title, summary, source, published_at.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (link) link, title, summary, source, published_at
+            FROM {POSTGRES_TABLE_RAG_DOCUMENTS}
+            WHERE collection_id = %s
+            ORDER BY link, chunk_index;
+            """,
+            (collection_id,),
+        )
+        rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
 def _embedding_to_vector_str(embedding: List[float]) -> str:
     """Формирует строку для вставки в колонку pgvector: '[0.1, 0.2, ...]'."""
     return "[" + ",".join(str(float(x)) for x in embedding) + "]"

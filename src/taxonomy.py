@@ -121,16 +121,19 @@ def get_keywords_config_for_selection(
     """
     Собирает конфиг ключевых слов для фильтрации по выбранным узлам таксономии.
 
-    Выбранные узлы задаются полями discipline, ga, activity (каждый может быть null).
-    Ключевые слова собираются с выбранных узлов и объединяются в список strong.
-    weak не заполняется (оставлен для совместимости с форматом фильтра).
+    Логика «чем точнее выбрал — тем уже источник ключевых слов»:
+    - Только D задан  → keywords = D + все GA внутри D + все A внутри этих GA (весь поддерев).
+    - D + GA заданы   → keywords = выбранный GA + все A внутри него (D не берём).
+    - D + GA + A      → keywords = только выбранная A.
+
+    weak не заполняется (совместимость с форматом фильтра).
     blacklist берётся из корня таксономии.
 
     Args:
         taxonomy: Загруженная таксономия (результат load_taxonomy).
         selection: Словарь с ключами discipline, ga, activity.
                    Пример: {"discipline": "D1", "ga": "GA2", "activity": "A5"}.
-                   Если None или пустой — возвращается конфиг с пустыми strong/weak и blacklist из таксономии.
+                   Если None или пустой — возвращается конфиг с пустыми strong/weak и blacklist.
 
     Returns:
         Словарь в формате для фильтра: {"strong": [...], "weak": [], "blacklist": [...]}.
@@ -154,13 +157,26 @@ def get_keywords_config_for_selection(
     for d in disciplines:
         if d.get("id") != discipline_id:
             continue
-        add_keywords(_collect_keywords_from_node(d))
-        if ga_id is not None:
+
+        if ga_id is None:
+            # Только D выбран — берём D + все GA + все A внутри D
+            add_keywords(_collect_keywords_from_node(d))
+            for g in (d.get("groups") or []):
+                add_keywords(_collect_keywords_from_node(g))
+                for a in (g.get("activities") or []):
+                    add_keywords(_collect_keywords_from_node(a))
+        else:
             for g in (d.get("groups") or []):
                 if g.get("id") != ga_id:
                     continue
-                add_keywords(_collect_keywords_from_node(g))
-                if activity_id is not None:
+
+                if activity_id is None:
+                    # D + GA выбраны — берём GA + все A внутри него (D не берём)
+                    add_keywords(_collect_keywords_from_node(g))
+                    for a in (g.get("activities") or []):
+                        add_keywords(_collect_keywords_from_node(a))
+                else:
+                    # D + GA + A выбраны — только выбранная A
                     for a in (g.get("activities") or []):
                         if a.get("id") == activity_id:
                             add_keywords(_collect_keywords_from_node(a))

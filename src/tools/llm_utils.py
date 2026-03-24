@@ -3,7 +3,13 @@
 
 Обеспечивает:
 - Очистку текста для LLM
-- Суммаризацию статей
+- Суммаризацию статей через GigaChat (основной путь)
+- Суммаризацию через facebook/bart-large-cnn (fallback когда GigaChat недоступен)
+
+Управление fallback:
+  # В config.py: GIGACHAT_SUMMARIZATION_ENABLED = False
+  # Или через env:
+  GIGACHAT_SUMMARIZATION_ENABLED=false python3 -m src.main
 """
 import logging
 import re
@@ -13,17 +19,73 @@ from bs4 import BeautifulSoup
 from gigachat import GigaChat
 
 from config.config import (
+    BART_SUMMARIZATION_MODEL,
+    BART_SUMMARY_MAX_LENGTH,
+    BART_SUMMARY_MIN_LENGTH,
     DEFAULT_SUMMARY_MAX_CHARS,
     DEFAULT_SUMMARY_TEMPERATURE,
     DEFAULT_TEXT_CLEAN_MAX_CHARS,
     GIGACHAT_CREDENTIALS,
     GIGACHAT_MODEL,
+    GIGACHAT_SUMMARIZATION_ENABLED,
     GIGACHAT_VERIFY_SSL,
 )
 from .prompt_loader import format_prompt, load_prompt
 from .rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Ленивая инициализация BART — загружается только при первом вызове fallback
+_bart_pipeline = None
+
+
+def _get_bart_pipeline():
+    """Возвращает pipeline суммаризации BART (загружает модель при первом вызове)."""
+    global _bart_pipeline
+    if _bart_pipeline is None:
+        try:
+            from transformers import pipeline
+            logger.info("Загрузка BART fallback модели: %s", BART_SUMMARIZATION_MODEL)
+            _bart_pipeline = pipeline(
+                "summarization",
+                model=BART_SUMMARIZATION_MODEL,
+                truncation=True,
+            )
+            logger.info("✅ BART модель загружена")
+        except Exception as e:
+            logger.error("Не удалось загрузить BART модель: %s", e)
+            raise RuntimeError(f"BART fallback недоступен: {e}") from e
+    return _bart_pipeline
+
+
+def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
+    """
+    Суммаризация через facebook/bart-large-cnn (fallback).
+
+    BART — английская модель, результат на том же языке что и входной текст.
+    Для русских статей используйте IlyaGusev/mbart_ru_sum_gazeta (см. config.py).
+
+    Args:
+        title: Заголовок статьи (добавляется к тексту для контекста).
+        text: Текст статьи.
+        max_chars: Обрезаем вход до этого числа символов перед подачей в модель.
+
+    Returns:
+        Строка-резюме от BART.
+    """
+    bart = _get_bart_pipeline()
+
+    # BART принимает до 1024 токенов; обрезаем по символам как приближение
+    combined = f"{title}. {text}" if title else text
+    combined = combined[:max_chars]
+
+    result = bart(
+        combined,
+        max_length=BART_SUMMARY_MAX_LENGTH,
+        min_length=BART_SUMMARY_MIN_LENGTH,
+        do_sample=False,
+    )
+    return result[0]["summary_text"].strip()
 
 
 def create_gigachat_client() -> GigaChat:
@@ -103,53 +165,73 @@ def clean_text_for_llm(text: str, max_chars: int = DEFAULT_TEXT_CLEAN_MAX_CHARS)
 def summarize_article(
     title: str,
     full_text: str,
-    client: GigaChat,
+    client: Optional[GigaChat] = None,
     rate_limiter: Optional[RateLimiter] = None,
     max_chars: int = DEFAULT_SUMMARY_MAX_CHARS,
-    temperature: float = DEFAULT_SUMMARY_TEMPERATURE
+    temperature: float = DEFAULT_SUMMARY_TEMPERATURE,
 ) -> str:
     """
-    Делает выжимку из статьи: 3–4 предложения на русском.
-    
-    Использует очищенный full_text.
-    
+    Делает выжимку из статьи: 3–4 предложения на русском (GigaChat) или на языке
+    оригинала (BART fallback).
+
+    Порядок:
+      1. Если GIGACHAT_SUMMARIZATION_ENABLED=True и client передан — GigaChat.
+      2. Если GigaChat выбросил исключение или отключён — BART fallback.
+      3. Если и BART недоступен — возвращает строку с ошибкой.
+
     Args:
-        title: Заголовок статьи
-        full_text: Полный текст статьи
-        client: Клиент GigaChat (обязательный параметр)
-        rate_limiter: Rate limiter для управления задержками
-        max_chars: Максимальная длина текста для суммаризации
-        temperature: Temperature для LLM
-        
+        title: Заголовок статьи.
+        full_text: Полный текст статьи.
+        client: Клиент GigaChat; если None и GigaChat включён — логируется предупреждение.
+        rate_limiter: Rate limiter для управления задержками между запросами к GigaChat.
+        max_chars: Максимальная длина текста перед отправкой в модель.
+        temperature: Temperature для GigaChat.
+
     Returns:
-        Краткая выжимка статьи (3–4 предложения)
+        Краткая выжимка статьи.
     """
     if not isinstance(full_text, str) or not full_text.strip():
         return "Не удалось получить текст статьи для суммаризации."
-    
+
     cleaned = clean_text_for_llm(full_text, max_chars=max_chars)
-    
-    # Загружаем промпты из файлов
-    system_prompt = load_prompt("summary_system")
-    user_prompt_template = load_prompt("summary_user")
-    user_prompt = format_prompt(user_prompt_template, title=title, cleaned_text=cleaned)
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    
-    # Rate limiting
-    if rate_limiter:
-        rate_limiter.wait_if_needed()
-    
+
+    # ── Основной путь: GigaChat ───────────────────────────────────────────
+    if GIGACHAT_SUMMARIZATION_ENABLED:
+        if client is None:
+            logger.warning("GigaChat включён, но client не передан — переключаемся на BART.")
+        else:
+            system_prompt = load_prompt("summary_system")
+            user_prompt_template = load_prompt("summary_user")
+            user_prompt = format_prompt(user_prompt_template, title=title, cleaned_text=cleaned)
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            if rate_limiter:
+                rate_limiter.wait_if_needed()
+
+            try:
+                result = client.chat({"messages": messages, "temperature": temperature})
+                return result.choices[0].message.content.strip()
+            except Exception as e:
+                logger.warning(
+                    "GigaChat недоступен для статьи '%s': %s — переключаемся на BART.",
+                    title[:50],
+                    e,
+                )
+    else:
+        logger.info("GigaChat отключён (GIGACHAT_SUMMARIZATION_ENABLED=False) — используем BART.")
+
+    # ── Fallback: BART ────────────────────────────────────────────────────
     try:
-        result = client.chat({"messages": messages, "temperature": temperature})
-        summary = result.choices[0].message.content.strip()
+        summary = _summarize_with_bart(title, cleaned)
+        logger.info("BART fallback успешно сработал для '%s'", title[:50])
         return summary
     except Exception as e:
-        logger.error(f"Ошибка при суммаризации статьи '{title[:50]}...': {e}")
-        return "Ошибка при суммаризации статьи."
+        logger.error("BART fallback тоже недоступен для '%s': %s", title[:50], e)
+        return "Ошибка при суммаризации статьи (GigaChat и BART недоступны)."
 
 
 def format_summary_text(summary: str, width: int = 100) -> str:

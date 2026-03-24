@@ -26,6 +26,7 @@ from .tools.rate_limiter import RateLimiter
 from .tools.text_extraction import add_full_text_column
 from config.config import (
     DEFAULT_EMBED_THRESHOLD,
+    EMBED_RELEVANT_THRESHOLD,
     DEFAULT_HOURS_BACK,
     DEFAULT_LIMIT_PER_FEED,
     DEFAULT_LLM_SLEEP,
@@ -57,71 +58,111 @@ GREEN = "\033[32m"
 RESET = "\033[0m"
 
 
+def collect_rss(
+    hours_back: Optional[int] = None,
+    limit_per_feed: Optional[int] = None,
+    rss_feeds: Optional[dict] = None,
+) -> dict:
+    """
+    Этап 1 (отдельная функция): обходит RSS-ленты и сохраняет новые статьи в processed_articles.
+
+    Отделён от run_pipeline, чтобы можно было:
+    - Запускать сбор по расписанию (cron / scheduler) независимо от обработки.
+    - Вызывать run_pipeline без сетевых запросов когда данные уже свежие.
+
+    Args:
+        hours_back: Глубина выборки по времени (часов назад). По умолчанию — из config.
+        limit_per_feed: Максимум статей на ленту. По умолчанию — из config.
+        rss_feeds: Словарь {name: url}. По умолчанию — из config.
+
+    Returns:
+        Словарь stats с ключами: unique_articles, total_parsed, duplicates_skipped,
+        already_processed_skipped, feeds_processed, feeds_failed, time_elapsed_sec,
+        per_feed_new_count.
+    """
+    _hours_back = hours_back if hours_back is not None else DEFAULT_HOURS_BACK
+    _limit = limit_per_feed if limit_per_feed is not None else DEFAULT_LIMIT_PER_FEED
+    _feeds = rss_feeds if rss_feeds is not None else RSS_FEEDS
+
+    print("=" * 60)
+    print("СБОР СТАТЕЙ ИЗ RSS-ЛЕНТ")
+    print("=" * 60)
+    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Лент: {len(_feeds)}, глубина: {_hours_back} ч, лимит на ленту: {_limit}")
+    print()
+
+    start = time.time()
+    df_articles, stats = collect_articles_for_window(
+        _hours_back,
+        limit_per_feed=_limit,
+        rss_feeds=_feeds,
+    )
+    elapsed = time.time() - start
+
+    per_feed_new = stats.get("per_feed_new_count", {})
+    for name in sorted(_feeds.keys()):
+        count = per_feed_new.get(name, 0)
+        prefix = f"{GREEN}" if count > 0 else ""
+        suffix = f"{RESET}" if count > 0 else ""
+        print(f"   {prefix}{name} — новых: {count}{suffix}")
+    print()
+    print(f"Итого новых статей: {stats['unique_articles']}  |  время: {elapsed:.2f} сек")
+    print("=" * 60)
+
+    return stats
+
+
 def run_pipeline(
     taxonomy_selection_override: Optional[dict] = None,
     collection_name: Optional[str] = None,
 ):
     """
-    Запускает весь пайплайн обработки статей.
+    Пайплайн обработки статей (Этапы 2–6): фильтрация, эмбеддинги, суммаризация, RAG.
+
+    Читает статьи из таблицы processed_articles (уже собранные через collect_rss или
+    предыдущие запуски). RSS-сбор в этой функции НЕ выполняется — вызовите collect_rss()
+    отдельно когда нужно обновить данные.
 
     Args:
-        taxonomy_selection_override: Если задан, используется вместо TAXONOMY_SELECTION из config (например, результат агента-роутера).
+        taxonomy_selection_override: Узлы таксономии D/GA/A. Если None — берётся из config.
+        collection_name: Имя коллекции. Если None — генерируется из таксономии.
     """
     selection = _resolve_taxonomy_selection(taxonomy_selection_override)
     pipeline_start = time.time()
 
-    print("="*60)
-    print("🚀 ЗАПУСК ПАЙПЛАЙНА СБОРА СТАТЕЙ С HABR")
-    print("="*60)
-    print(f"📅 Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Этап 1: Сбор статей из RSS-лент (только новые, по last_processed_published_at) и сохранение в БД
-    print("📥 Этап 1: Сбор статей из RSS-лент...")
-    stage1_start = time.time()
-    
-    df_articles, stats_rss = collect_articles_for_window(
-        DEFAULT_HOURS_BACK,
-        limit_per_feed=DEFAULT_LIMIT_PER_FEED,
-        rss_feeds=RSS_FEEDS
-    )
-    
-    # Временное окно пайплайна берём из БД по published_at (реально «последние N часов»)
+    print("=" * 60)
+    print("ЗАПУСК ПАЙПЛАЙНА ОБРАБОТКИ СТАТЕЙ")
+    print("=" * 60)
+    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Загружаем статьи из БД по временному окну (без RSS-запросов)
     conn = get_connection()
     if conn is not None:
         df_for_pipeline = load_articles_for_window(conn, DEFAULT_HOURS_BACK)
-        if df_for_pipeline.empty:
-            df_for_pipeline = df_articles  # fallback: только что собранные
     else:
-        df_for_pipeline = df_articles
-    
-    stage1_time = time.time() - stage1_start
-    print(f"   ✓ Завершено за {stage1_time:.2f} сек")
-    print(f"   ✓ Собрано новых из RSS: {stats_rss['unique_articles']}")
-    print(f"   ✓ Статей в окне {DEFAULT_HOURS_BACK} ч для пайплайна: {len(df_for_pipeline)}")
+        df_for_pipeline = __import__("pandas").DataFrame()
+
+    # Заглушка stats_rss для итоговой сводки (RSS не запускался)
+    stats_rss = {
+        "unique_articles": 0,
+        "total_parsed": 0,
+        "duplicates_skipped": 0,
+        "already_processed_skipped": 0,
+        "feeds_failed": 0,
+        "per_feed_new_count": {},
+    }
+
+    print(f"   Статей в окне {DEFAULT_HOURS_BACK} ч из БД: {len(df_for_pipeline)}")
     print()
-    # 1) После "RSS-лент для обработки" — все просмотренные источники (зелёный если есть новые статьи)
-    print(f"📡 RSS-лент для обработки: {len(RSS_FEEDS)}")
-    per_feed_new = stats_rss.get("per_feed_new_count", {})
-    for name in sorted(RSS_FEEDS.keys()):
-        count = per_feed_new.get(name, 0)
-        prefix = f"{GREEN}" if count > 0 else ""
-        suffix = f"{RESET}" if count > 0 else ""
-        print(f"   📡 {prefix}{name} - новых в rss: {count}{suffix}")
-    print()
-    # 2) Все статьи, попавшие в пайплайн: источник | название | ссылка (зелёный + если новая статья)
-    new_links = set(df_articles["link"]) if not df_articles.empty else set()
     for _, row in df_for_pipeline.iterrows():
         source = row.get("source", "")
         title = row.get("title", "")
         link = row.get("link", "")
-        is_new = link in new_links
-        prefix = f"{GREEN}+ " if is_new else "   "
-        suffix = f"{RESET}" if is_new else ""
-        print(f"   {prefix}{source} | {title} | {link}{suffix}")
+        print(f"   {source} | {title} | {link}")
     print()
     
     # Этап 2: Фильтрация по ключевым словам (ключевые слова из таксономии по выбранным узлам D/GA/A)
-    print("🔍 Этап 2: Фильтрация по ключевым словам...")
+    print("[Этап 2] Фильтрация по ключевым словам (лемматизация)...")
     stage2_start = time.time()
     taxonomy = load_taxonomy()
     # Привязка к коллекции: получить или создать запись в collections для текущего selection.
@@ -133,7 +174,7 @@ def run_pipeline(
         collection_name=collection_name,
     )
     if collection:
-        print(f"   📁 Коллекция: {collection['name']} (id={collection['id']})")
+        print(f"   Коллекция: {collection['name']} (id={collection['id']})")
     keywords_config = get_keywords_config_for_selection(taxonomy, selection)
     df_filtered, stats_keywords = filter_articles_by_keywords(
         df_for_pipeline,
@@ -142,8 +183,8 @@ def run_pipeline(
     )
     
     stage2_time = time.time() - stage2_start
-    print(f"   ✓ Завершено за {stage2_time:.2f} сек")
-    print(f"   ✓ Статей прошло фильтр: {stats_keywords['passed']}")
+    print(f"   Завершено за {stage2_time:.2f} сек")
+    print(f"   Статей прошло фильтр: {stats_keywords['passed']}")
     print()
     # 3) Все статьи из пайплайна: полное название | rss источник (зелёный + если прошла; для прошедших — по какому ключевому слову)
     passed_links = set(df_filtered["link"]) if not df_filtered.empty else set()
@@ -164,7 +205,7 @@ def run_pipeline(
     print()
     
     # Этап 3: Фильтрация по эмбеддингам (ключевые слова и topic_descriptions из таксономии по D/GA/A)
-    print("🎯 Этап 3: Фильтрация по эмбеддингам...")
+    print("[Этап 3] Фильтрация по эмбеддингам (семантическое сходство)...")
     stage3_start = time.time()
     topic_descriptions_per_node = get_topic_descriptions_per_node(taxonomy, selection)
     embed_model = get_embedding_model()
@@ -177,8 +218,8 @@ def run_pipeline(
     )
     
     stage3_time = time.time() - stage3_start
-    print(f"   ✓ Завершено за {stage3_time:.2f} сек")
-    print(f"   ✓ Статей прошло фильтр: {stats_embedding['passed']}")
+    print(f"   Завершено за {stage3_time:.2f} сек")
+    print(f"   Статей прошло фильтр: {stats_embedding['passed']}")
     print()
     # 4) Все статьи из пайплайна (после ключевых слов): название | источник (зелёный если прошла фильтр по эмбеддингам)
     embedding_passed_links = set(df_embedding["link"]) if not df_embedding.empty else set()
@@ -192,35 +233,37 @@ def run_pipeline(
         print(f"   {prefix}{title} | {source}{suffix}")
     print()
     
-    # Сортируем по убыванию embed_similarity и берем топ-6
-    print("📊 Выбор топ-6 статей по сходству...")
+    # Сортируем по убыванию embed_similarity и отбираем статьи выше порога (попадают в дайджест и RAG)
+    print(f"Отбор статей выше порога сходства (>= {EMBED_RELEVANT_THRESHOLD}):")
     df_embedding_sorted = df_embedding.sort_values("embed_similarity", ascending=False)
-    df_top6 = df_embedding_sorted.head(6).copy()
-    print(f"   ✓ Отобрано статей: {len(df_top6)}")
+    df_above_threshold = df_embedding_sorted[
+        df_embedding_sorted["embed_similarity"] >= EMBED_RELEVANT_THRESHOLD
+    ].copy()
+    print(f"   Отобрано статей: {len(df_above_threshold)}")
     print()
-    # 5) Все статьи после эмбеддингов в отсортированном виде (зелёный — вошли в топ-6 дайджеста)
-    top6_links = set(df_top6["link"]) if not df_top6.empty else set()
+    # 5) Все статьи после эмбеддингов в отсортированном виде (зелёный — выше порога, попадают в дайджест/RAG)
+    above_threshold_links = set(df_above_threshold["link"]) if not df_above_threshold.empty else set()
     for rank, (_, row) in enumerate(df_embedding_sorted.iterrows(), 1):
         title = row.get("title", "")
         source = row.get("source", "")
         link = row.get("link", "")
         sim = row.get("embed_similarity", 0)
-        in_top6 = link in top6_links
-        prefix = f"{GREEN}" if in_top6 else ""
-        suffix = f"{RESET}" if in_top6 else ""
+        in_relevant = link in above_threshold_links
+        prefix = f"{GREEN}" if in_relevant else ""
+        suffix = f"{RESET}" if in_relevant else ""
         print(f"   {prefix}{rank}. {title} | {source} (сходство: {sim:.3f}){suffix}")
     print()
     
-    # Этап 4: Извлечение полного текста статей (только для топ-6)
-    print("📄 Этап 4: Извлечение полного текста статей...")
+    # Этап 4: Извлечение полного текста статей (все выше порога)
+    print("[Этап 4] Извлечение полного текста статей...")
     stage4_start = time.time()
     
-    df_with_text = add_full_text_column(df_top6)
+    df_with_text = add_full_text_column(df_above_threshold)
     
     stage4_time = time.time() - stage4_start
     successful_texts = sum(1 for t in df_with_text["full_text"] if t is not None)
-    print(f"   ✓ Завершено за {stage4_time:.2f} сек")
-    print(f"   ✓ Успешно извлечено текстов: {successful_texts}/{len(df_with_text)}")
+    print(f"   Завершено за {stage4_time:.2f} сек")
+    print(f"   Успешно извлечено текстов: {successful_texts}/{len(df_with_text)}")
     print()
     
     # Этап 5: LLM-фильтрация релевантности (ЗАКОММЕНТИРОВАНО)
@@ -238,12 +281,11 @@ def run_pipeline(
     df_relevant = df_with_text
     
     # Этап 6: Суммаризация статей
-    print("📝 Этап 6: Суммаризация статей...")
+    print("[Этап 6] Суммаризация статей...")
     stage6_start = time.time()
     
-    # Создаем клиент GigaChat и rate limiter один раз (закомментировано — суммаризация отключена)
-    # giga_client = create_gigachat_client()
-    # rate_limiter = RateLimiter(delay_seconds=DEFAULT_LLM_SLEEP)
+    giga_client = create_gigachat_client()
+    rate_limiter = RateLimiter(delay_seconds=DEFAULT_LLM_SLEEP)
     
     summaries = []
     total_relevant = len(df_relevant)
@@ -258,22 +300,20 @@ def run_pipeline(
             summaries.append("Не удалось получить текст статьи для суммаризации.")
             continue
         
-        # Суммаризация отключена — подставляем заглушку вместо вызова LLM
-        # print(f"   ▶ Суммаризация [{idx}/{total_relevant}]: {title[:60]}...")
-        # summary = summarize_article(
-        #     title=title,
-        #     full_text=full_text,
-        #     client=giga_client,
-        #     rate_limiter=rate_limiter
-        # )
-        # summaries.append(summary)
-        summaries.append("(Суммаризация отключена)")
+        print(f"   ▶ Суммаризация [{idx}/{total_relevant}]: {title[:60]}...")
+        summary = summarize_article(
+            title=title,
+            full_text=full_text,
+            client=giga_client,
+            rate_limiter=rate_limiter
+        )
+        summaries.append(summary)
     
     df_relevant["summary"] = summaries
     
     stage6_time = time.time() - stage6_start
-    print(f"   ✓ Завершено за {stage6_time:.2f} сек")
-    print(f"   ✓ Суммаризировано статей: {len(summaries)}")
+    print(f"   Завершено за {stage6_time:.2f} сек")
+    print(f"   Суммаризировано статей: {len(summaries)}")
     print()
     
     # Сохранение финального результата
@@ -296,63 +336,54 @@ def run_pipeline(
                 conn, collection, df_relevant, model=embed_model
             )
             if rag_count > 0:
-                print(f"   📎 RAG: записано документов в коллекцию: {rag_count}")
+                print(f"   RAG: записано документов в коллекцию: {rag_count}")
         except Exception as e:
             logger.warning("Не удалось записать RAG-документы (проверьте pgvector и таблицу rag_documents): %s", e)
 
     # Итоговая статистика
     total_time = time.time() - pipeline_start
     
-    print("="*60)
-    print("📊 ИТОГОВАЯ СВОДКА ПАЙПЛАЙНА")
-    print("="*60)
-    print("📥 Этап 1 (RSS сбор):")
-    print(f"   • Уникальных статей собрано в этом запуске: {stats_rss['unique_articles']}")
-    print(f"   • Записей из RSS перебрано: {stats_rss['total_parsed']} "
-          f"(одна статья может быть в нескольких лентах → считаем каждый раз; "
-          f"пропущено уже в БД: {stats_rss.get('already_processed_skipped', 0)}, дубликатов в запуске: {stats_rss['duplicates_skipped']})")
-    if stats_rss.get('feeds_failed', 0) > 0:
-        print(f"   • Лент с ошибками: {stats_rss['feeds_failed']}")
+    print("=" * 60)
+    print("ИТОГОВАЯ СВОДКА ПАЙПЛАЙНА")
+    print("=" * 60)
+    print(f"[Источник] Статей из БД (окно {DEFAULT_HOURS_BACK} ч): {len(df_for_pipeline)}")
+    print("   Подсказка: для обновления данных из RSS вызовите POST /api/rss/collect")
     print()
-    print("🔍 Этап 2 (Фильтрация по ключевым словам с лемматизацией):")
-    print(f"   • Всего статей на входе: {stats_keywords['total_articles']}")
-    print(f"   • Прошло фильтр: {stats_keywords['passed']}")
+    print("[Этап 2] Фильтрация по ключевым словам (лемматизация):")
+    print(f"   Всего статей на входе: {stats_keywords['total_articles']}")
+    print(f"   Прошло фильтр: {stats_keywords['passed']}")
     print()
-    print("🎯 Этап 3 (Фильтрация по эмбеддингам):")
-    print(f"   • Всего статей на входе: {stats_embedding['total_articles']}")
-    print(f"   • Прошло фильтр: {stats_embedding['passed']}")
-    print(f"   • Отклонено: {stats_embedding['rejected']}")
-    print(f"   • Сходство: min={stats_embedding['min_similarity']:.3f}, "
+    print("[Этап 3] Фильтрация по эмбеддингам:")
+    print(f"   Всего статей на входе: {stats_embedding['total_articles']}")
+    print(f"   Прошло фильтр: {stats_embedding['passed']}")
+    print(f"   Отклонено: {stats_embedding['rejected']}")
+    print(f"   Сходство: min={stats_embedding['min_similarity']:.3f}, "
           f"mean={stats_embedding['mean_similarity']:.3f}, max={stats_embedding['max_similarity']:.3f}")
     print()
-    print("📊 Выбор топ-6 статей:")
-    print(f"   • Отобрано статей по embed_similarity: {len(df_top6)}")
-    if len(df_top6) > 0:
-        top_similarity = df_top6["embed_similarity"].max()
-        min_similarity = df_top6["embed_similarity"].min()
-        print(f"   • Диапазон сходства: {min_similarity:.3f} - {top_similarity:.3f}")
+    print(f"Отбор выше порога сходства (>= {EMBED_RELEVANT_THRESHOLD}):")
+    print(f"   Отобрано статей: {len(df_above_threshold)}")
+    if len(df_above_threshold) > 0:
+        top_similarity = df_above_threshold["embed_similarity"].max()
+        min_similarity = df_above_threshold["embed_similarity"].min()
+        print(f"   Диапазон сходства: {min_similarity:.3f} - {top_similarity:.3f}")
     print()
-    print("📄 Этап 4 (Извлечение полного текста):")
-    print(f"   • Всего статей: {len(df_with_text)}")
-    print(f"   • Успешно извлечено: {successful_texts}")
+    print("[Этап 4] Извлечение полного текста:")
+    print(f"   Всего статей: {len(df_with_text)}")
+    print(f"   Успешно извлечено: {successful_texts}")
     print()
-    # print("🤖 Этап 5 (LLM-фильтрация релевантности):")
-    # print(f"   • Всего статей на входе: {len(df_with_text)}")
-    # print(f"   • Релевантных статей: {len(df_relevant)}")
-    # print()
-    print("📝 Этап 6 (Суммаризация):")
-    print(f"   • Суммаризировано статей: {len(summaries)}")
+    print("[Этап 6] Суммаризация:")
+    print(f"   Суммаризировано статей: {len(summaries)}")
     print()
-    print(f"⏱️  Общее время выполнения: {total_time:.2f} сек ({total_time/60:.2f} мин)")
-    print(f"💾 Результат сохранен: {output_file}")
+    print(f"Общее время выполнения: {total_time:.2f} сек ({total_time/60:.2f} мин)")
+    print(f"Результат сохранён: {output_file}")
     if collection and collection.get("id"):
-        print(f"📁 Коллекция обновлена: {collection.get('name', '')} (id={collection['id']})")
+        print(f"Коллекция обновлена: {collection.get('name', '')} (id={collection['id']})")
     print("="*60)
     
     # Вывод дайджеста
     if len(df_relevant) > 0:
         print("\n" + "="*60)
-        print("📋 ДАЙДЖЕСТ СТАТЕЙ")
+        print("ОТОБРАННЫЕ СТАТЬИ")
         print("="*60 + "\n")
         
         for i, (_, row) in enumerate(df_relevant.iterrows(), 1):
@@ -364,10 +395,10 @@ def run_pipeline(
             formatted_summary = format_summary_text(summary, width=95)
             
             print("─" * 60)
-            print(f"🔹 {title}")
-            print(f"🔗 {link}")
-            print(f"📊 Сходство: {similarity:.3f}\n")
-            print("📝 Выжимка:\n")
+            print(f"[{i}] {title}")
+            print(f"    {link}")
+            print(f"    Сходство: {similarity:.3f}\n")
+            print("    Аннотация:\n")
             print(formatted_summary)
             print("\n")
     
@@ -382,25 +413,32 @@ if __name__ == "__main__":
         default=None,
         help="Запрос на естественном языке: агент-роутер выберет узлы D/GA/A, пайплайн запустится с этой выборкой.",
     )
+    parser.add_argument(
+        "--collect",
+        action="store_true",
+        help="Только сбор из RSS (без обработки). Эквивалент POST /api/rss/collect.",
+    )
     args = parser.parse_args()
 
-    if args.query:
+    if args.collect:
+        collect_rss()
+    elif args.query:
         from .agents.router import run_router, router_output_to_taxonomy_selection
-        print("🤖 Запрос к агенту-роутеру: выбор узлов таксономии по запросу...")
+        print("Запрос к агенту-роутеру: выбор узлов таксономии по запросу...")
         router_out = run_router(args.query)
         selection = router_output_to_taxonomy_selection(router_out)
         if router_out.get("clarification_needed") and router_out.get("clarification_question"):
-            print("❓ Требуется уточнение:", router_out["clarification_question"])
+            print("Требуется уточнение:", router_out["clarification_question"])
             print("   Запустите снова с уточнённым запросом (--query \"...\") или без --query для конфига.")
             raise SystemExit(1)
         if router_out.get("status") == "not_found" or selection is None:
-            print("⚠️ По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
+            print("По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
             selection = None
             collection_name = None
         else:
             print(f"   Выборка: D={selection.get('discipline')}, GA={selection.get('ga')}, A={selection.get('activity')}")
             try:
-                raw_name = input("📝 Введите имя коллекции (Enter — имя по умолчанию): ").strip()
+                raw_name = input("Введите имя коллекции (Enter — имя по умолчанию): ").strip()
             except EOFError:
                 raw_name = ""
             collection_name = raw_name or None

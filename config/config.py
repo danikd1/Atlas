@@ -239,13 +239,15 @@ GENERIC_SINGLE_LEMMAS = {
 # Заполняется агентом-taxonomy по запросу пользователя; здесь — значение по умолчанию для пайплайна.
 # Пример: {"discipline": "D1", "ga": "GA2", "activity": "A5"} или только {"discipline": "D1", "ga": None, "activity": None}.
 TAXONOMY_SELECTION = {
-    "discipline": "D1",
-    "ga": None,
+    "discipline": "D3",
+    "ga": "GA1",
     "activity": None,
 }
 
 # Эмбеддинги: параметры фильтрации
-DEFAULT_EMBED_THRESHOLD = 0.35  # Порог сходства для embedding-фильтра
+DEFAULT_EMBED_THRESHOLD = 0.35  # Порог сходства для embedding-фильтра (статья проходит этап 3)
+# Порог сходства для попадания в дайджест и RAG: из прошедших этап 3 берём только статьи с embed_similarity >= этого значения (полный текст, суммаризация, rag_documents)
+EMBED_RELEVANT_THRESHOLD = 0.35
 DEFAULT_EMBED_BATCH_SIZE = 32  # Размер батча для обработки эмбеддингов
 
 # Эмбеддинги: модель
@@ -260,9 +262,24 @@ DEFAULT_TEXT_EXTRACTION_SLEEP = 2.0  # Задержка между попытк�
 DEFAULT_TEXT_MIN_LENGTH = 300  # Минимальная длина текста для успешного извлечения
 
 # GigaChat: конфигурация
-GIGACHAT_CREDENTIALS = "MDE5YjBmMDctYzZmNC03NzliLTg2MjUtYmI4ZTRhZWNmOTI2OmVkZWNmMDNiLWI1YTYtNDM2OS1iZDkzLWRiZTYxOWM3ZjgyMQ=="
+GIGACHAT_CREDENTIALS = "MDE5OTUyOTgtMWZmMC03NjRjLWI4ZTQtODRkZTMwNmNhMTJjOjE1NmFiNTUzLTExYjItNDRmZi1hMWJiLTZhMWUzZmM5M2YyNg=="
 GIGACHAT_MODEL = "GigaChat"  # Модель GigaChat
 GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
+
+# Если False — GigaChat пропускается и сразу используется BART-fallback.
+# Удобно для тестирования fallback без отключения интернета.
+# Управляется переменной окружения: GIGACHAT_SUMMARIZATION_ENABLED=false python3 -m src.main
+GIGACHAT_SUMMARIZATION_ENABLED: bool = (
+    os.environ.get("GIGACHAT_SUMMARIZATION_ENABLED", "true").strip().lower() != "false"
+)
+GIGACHAT_SUMMARIZATION_ENABLED = False
+
+# BART fallback: модель для суммаризации когда GigaChat недоступен.
+# facebook/bart-large-cnn  — английский, ~1.6 GB, высокое качество (по умолчанию)
+# IlyaGusev/mbart_ru_sum_gazeta — русский, ~900 MB (раскомментируй для RU-статей)
+BART_SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
+BART_SUMMARY_MAX_LENGTH = 130   # токенов в резюме
+BART_SUMMARY_MIN_LENGTH = 40    # токенов минимум
 
 # LLM: параметры обработки текста
 DEFAULT_TEXT_CLEAN_MAX_CHARS = 12000  # Максимальная длина текста для очистки
@@ -294,4 +311,11 @@ EMBEDDING_DIM = 768
 # RAG-чанкирование: размер чанка и перекрытие (в токенах)
 RAG_CHUNK_MAX_TOKENS = 128
 RAG_CHUNK_OVERLAP_TOKENS = 50
+
+# Дайджест (4 раздела без графа): кластеризация + LLM-описание/классификация
+DIGEST_N_CLUSTERS = 15  # число кластеров KMeans (можно None для авто по HDBSCAN)
+DIGEST_MAX_ITEMS_PER_SECTION = 5  # макс. кластеров в каждом разделе (key_trends, methods, tools, case_studies)
+DIGEST_MAX_ARTICLES_PER_CLUSTER = 3  # макс. статей (по link) в блоке
+DIGEST_LLM_LANGUAGE = "ru"  # "ru" | "en"
+DIGEST_TYPICAL_CHUNKS_PER_CLUSTER = 5  # сколько чанков отдавать в LLM для описания кластера
 
