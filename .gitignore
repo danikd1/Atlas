@@ -22,8 +22,10 @@ venv/
 ENV/
 .venv
 
-# Результаты работы (CSV в outputs игнорируются)
-outputs/*.csv
+# Результаты работы
+outputs/
+models/
+bertopic_output_2/
 *.xlsx
 *.parquet
 

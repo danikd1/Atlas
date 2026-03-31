@@ -18,6 +18,7 @@ class CollectionRow(TypedDict, total=False):
     """Строка таблицы collections (id, name, D/GA/A, collection_key, временные метки)."""
     id: int
     name: str
+    description: Optional[str]
     discipline: Optional[str]
     ga: Optional[str]
     activity: Optional[str]
@@ -41,11 +42,14 @@ from config.config import (
     POSTGRES_HOST,
     POSTGRES_PASSWORD,
     POSTGRES_PORT,
+    POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS,
     POSTGRES_TABLE_COLLECTIONS,
     POSTGRES_TABLE_FEED_STATE,
+    POSTGRES_TABLE_INBOX_ARTICLES,
     POSTGRES_TABLE_PROCESSED_ARTICLES,
     POSTGRES_TABLE_RAG_DOCUMENTS,
     POSTGRES_USER,
+    RSS_FEEDS,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,17 +100,20 @@ def ensure_tables(conn) -> None:
             );
             """
         )
-        # Добавляем колонки title, summary если таблица уже существовала без них (PG 11+ или игнорируем ошибку)
-        for col in ("title", "summary"):
+        # Добавляем колонки если таблица уже существовала без них
+        for col_def in (
+            "title TEXT",
+            "summary TEXT",
+            "feed_id INT REFERENCES feeds(id) ON DELETE SET NULL",
+        ):
             try:
                 cur.execute(
                     f"""
                     ALTER TABLE {POSTGRES_TABLE_PROCESSED_ARTICLES}
-                    ADD COLUMN IF NOT EXISTS {col} TEXT;
+                    ADD COLUMN IF NOT EXISTS {col_def};
                     """
                 )
             except Exception:
-                # колонка уже есть или старая версия PG без IF NOT EXISTS
                 pass
 
         # Таблица состояния по каждому RSS-источнику
@@ -139,6 +146,17 @@ def ensure_tables(conn) -> None:
             );
             """
         )
+        # Миграция: добавить колонку description если таблица уже существовала
+        try:
+            cur.execute(
+                f"""
+                ALTER TABLE {POSTGRES_TABLE_COLLECTIONS}
+                ADD COLUMN IF NOT EXISTS description TEXT;
+                """
+            )
+        except Exception:
+            pass
+
         # Миграция: если раньше был UNIQUE только по collection_key — убираем его, оставляем UNIQUE(collection_key, name).
         try:
             cur.execute(
@@ -249,6 +267,94 @@ def ensure_tables(conn) -> None:
                 pass
 
 
+        # Миграция: новые колонки в collections для BERTopic
+        for col_def in ("bertopic_topic_id INT", "model_version TEXT"):
+            try:
+                cur.execute(
+                    f"""
+                    ALTER TABLE {POSTGRES_TABLE_COLLECTIONS}
+                    ADD COLUMN IF NOT EXISTS {col_def};
+                    """
+                )
+            except Exception:
+                pass
+
+        # Таблица назначений статей на BERTopic-темы
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} (
+                link          TEXT NOT NULL,
+                topic_id      INT  NOT NULL,
+                probability   FLOAT,
+                assigned_at   TIMESTAMPTZ DEFAULT NOW(),
+                model_version TEXT,
+                PRIMARY KEY (link, topic_id)
+            );
+            """
+        )
+
+        # Буфер статей без чёткой темы (prob < порога при transform)
+        try:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE_INBOX_ARTICLES} (
+                    link        TEXT PRIMARY KEY,
+                    title       TEXT,
+                    source      TEXT,
+                    embedding   VECTOR({EMBEDDING_DIM}),
+                    received_at TIMESTAMPTZ DEFAULT NOW(),
+                    checked_at  TIMESTAMPTZ
+                );
+                """
+            )
+        except Exception as e:
+            logger.warning("Таблица inbox_articles не создана (pgvector?): %s", e)
+
+        # Глобальный каталог RSS-лент: один URL = одна запись, независимо от числа подписчиков.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feeds (
+                id              SERIAL PRIMARY KEY,
+                url             TEXT NOT NULL UNIQUE,
+                name            TEXT NOT NULL,
+                favicon_url     TEXT,
+                is_catalog      BOOLEAN DEFAULT FALSE,
+                enabled         BOOLEAN DEFAULT TRUE,
+                last_fetched_at TIMESTAMPTZ,
+                last_error      TEXT,
+                error_count     INT DEFAULT 0
+            );
+            """
+        )
+
+        # Подписки пользователей на ленты: связь M:N между пользователем и лентой.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_feeds (
+                feed_id    INT NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+                user_id    INT,
+                folder_id  INT,
+                position   INT DEFAULT 0,
+                PRIMARY KEY (feed_id, user_id)
+            );
+            """
+        )
+
+        # Кэш статистики каталога: подписчики, посты в день, последний пост.
+        # Обновляется раз в час через refresh_catalog_stats() — тяжёлые агрегаты не считаются при каждом запросе.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_catalog_stats (
+                feed_id        INT PRIMARY KEY REFERENCES feeds(id) ON DELETE CASCADE,
+                subscribers    INT DEFAULT 0,
+                posts_per_week INT DEFAULT 0,
+                last_post_at   TIMESTAMPTZ,
+                updated_at     TIMESTAMPTZ DEFAULT NOW()
+            );
+            """
+        )
+
+
 def build_collection_key(selection: Dict[str, Optional[str]]) -> str:
     """
     Строит уникальный ключ коллекции по selection (discipline, ga, activity).
@@ -273,6 +379,7 @@ def get_or_create_collection(
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     collection_name: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> Optional[CollectionRow]:
     """
     Находит коллекцию по паре (collection_key, name) или создаёт новую.
@@ -295,7 +402,7 @@ def get_or_create_collection(
     if collection_name and collection_name.strip():
         name = collection_name.strip()
     else:
-        from src.taxonomy import get_collection_display_name
+        from src.pipeline.taxonomy import get_collection_display_name
         name = get_collection_display_name(taxonomy, selection)
     discipline = selection.get("discipline")
     ga = selection.get("ga")
@@ -304,7 +411,7 @@ def get_or_create_collection(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
+            SELECT id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
                    created_at, updated_at, last_refreshed_at
             FROM {POSTGRES_TABLE_COLLECTIONS}
             WHERE collection_key = %s AND name = %s;
@@ -316,24 +423,25 @@ def get_or_create_collection(
             cur.execute(
                 f"""
                 UPDATE {POSTGRES_TABLE_COLLECTIONS}
-                SET last_refreshed_at = NOW(), updated_at = NOW()
+                SET last_refreshed_at = NOW(), updated_at = NOW(),
+                    description = COALESCE(%s, description)
                 WHERE id = %s
-                RETURNING id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                RETURNING id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
                           created_at, updated_at, last_refreshed_at;
                 """,
-                (row["id"],),
+                (description, row["id"]),
             )
             row = cur.fetchone()
         else:
             cur.execute(
                 f"""
                 INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
-                    (name, discipline, ga, activity, collection_key, user_id, team_id, updated_at, last_refreshed_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                RETURNING id, name, discipline, ga, activity, collection_key, user_id, team_id,
+                    (name, description, discipline, ga, activity, collection_key, user_id, team_id, updated_at, last_refreshed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
                           created_at, updated_at, last_refreshed_at;
                 """,
-                (name, discipline, ga, activity, key, user_id, team_id),
+                (name, description, discipline, ga, activity, key, user_id, team_id),
             )
             row = cur.fetchone()
     if not row:
@@ -341,6 +449,7 @@ def get_or_create_collection(
     return {
         "id": row["id"],
         "name": row["name"],
+        "description": row["description"],
         "discipline": row["discipline"],
         "ga": row["ga"],
         "activity": row["activity"],
@@ -378,10 +487,14 @@ def list_collections(conn) -> List[CollectionRow]:
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
-                   created_at, updated_at, last_refreshed_at
-            FROM {POSTGRES_TABLE_COLLECTIONS}
-            ORDER BY updated_at DESC NULLS LAST, id DESC;
+            SELECT c.id, c.name, c.description, c.discipline, c.ga, c.activity,
+                   c.collection_key, c.user_id, c.team_id,
+                   c.created_at, c.updated_at, c.last_refreshed_at,
+                   COUNT(DISTINCT r.link) AS article_count
+            FROM {POSTGRES_TABLE_COLLECTIONS} c
+            LEFT JOIN {POSTGRES_TABLE_RAG_DOCUMENTS} r ON r.collection_id = c.id
+            GROUP BY c.id
+            ORDER BY c.updated_at DESC NULLS LAST, c.id DESC;
             """,
         )
         rows = cur.fetchall()
@@ -395,7 +508,7 @@ def get_collection_by_id(conn, collection_id: int) -> Optional[CollectionRow]:
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, name, discipline, ga, activity, collection_key, user_id, team_id,
+            SELECT id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
                    created_at, updated_at, last_refreshed_at
             FROM {POSTGRES_TABLE_COLLECTIONS}
             WHERE id = %s;
@@ -486,6 +599,12 @@ def upsert_rag_documents(
             summary = doc.get("summary") or ""
             source = doc.get("source") or ""
             published_at = doc.get("published_at")
+            try:
+                import pandas as pd
+                if pd.isnull(published_at):
+                    published_at = None
+            except (TypeError, ValueError, ImportError):
+                pass
             text_payload = doc.get("text_payload") or ""
             embedding = doc.get("embedding")
             embed_sim = doc.get("embed_similarity_to_topic")
@@ -586,6 +705,132 @@ def load_articles_for_window(conn, hours_back: int):
     return pd.DataFrame(records)
 
 
+def get_or_create_bertopic_collection(
+    conn,
+    topic_id: int,
+    topic_name: str,
+    model_version: str,
+    description: Optional[str] = None,
+) -> Optional[CollectionRow]:
+    """
+    Находит или создаёт коллекцию для BERTopic-темы.
+
+    collection_key = "bertopic_topic_{topic_id}"
+    discipline/ga/activity = NULL
+    """
+    if conn is None:
+        return None
+    key = f"bertopic_topic_{topic_id}"
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, description, discipline, ga, activity, collection_key,
+                   user_id, team_id, created_at, updated_at, last_refreshed_at
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            WHERE collection_key = %s AND name = %s;
+            """,
+            (key, topic_name),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                f"""
+                UPDATE {POSTGRES_TABLE_COLLECTIONS}
+                SET last_refreshed_at = NOW(), updated_at = NOW(),
+                    bertopic_topic_id = %s, model_version = %s,
+                    description = COALESCE(%s, description)
+                WHERE id = %s
+                RETURNING id, name, description, discipline, ga, activity, collection_key,
+                          user_id, team_id, created_at, updated_at, last_refreshed_at;
+                """,
+                (topic_id, model_version, description, row["id"]),
+            )
+            row = cur.fetchone()
+        else:
+            cur.execute(
+                f"""
+                INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
+                    (name, description, discipline, ga, activity, collection_key,
+                     bertopic_topic_id, model_version, updated_at, last_refreshed_at)
+                VALUES (%s, %s, NULL, NULL, NULL, %s, %s, %s, NOW(), NOW())
+                RETURNING id, name, description, discipline, ga, activity, collection_key,
+                          user_id, team_id, created_at, updated_at, last_refreshed_at;
+                """,
+                (topic_name, description, key, topic_id, model_version),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
+def upsert_bertopic_assignments(
+    conn,
+    assignments: List[Dict],
+    model_version: str,
+) -> int:
+    """
+    Вставляет или обновляет записи о принадлежности статей к BERTopic-темам.
+
+    Каждый элемент assignments: {"link": str, "topic_id": int, "probability": float|None}
+    """
+    if conn is None or not assignments:
+        return 0
+    count = 0
+    with conn.cursor() as cur:
+        for a in assignments:
+            link = a.get("link")
+            topic_id = a.get("topic_id")
+            if not link or topic_id is None:
+                continue
+            cur.execute(
+                f"""
+                INSERT INTO {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}
+                    (link, topic_id, probability, model_version, assigned_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (link, topic_id) DO UPDATE SET
+                    probability   = EXCLUDED.probability,
+                    model_version = EXCLUDED.model_version,
+                    assigned_at   = NOW();
+                """,
+                (link, topic_id, a.get("probability"), model_version),
+            )
+            count += 1
+    return count
+
+
+def add_to_inbox(
+    conn,
+    articles: List[Dict],
+) -> int:
+    """
+    Добавляет статьи в inbox_articles (буфер без чёткой темы).
+
+    Каждый элемент: {"link": str, "title": str, "source": str, "embedding": list[float]|None}
+    """
+    if conn is None or not articles:
+        return 0
+    count = 0
+    with conn.cursor() as cur:
+        for art in articles:
+            link = art.get("link")
+            if not link:
+                continue
+            embedding = art.get("embedding")
+            emb_str = _embedding_to_vector_str(embedding) if embedding else None
+            cur.execute(
+                f"""
+                INSERT INTO {POSTGRES_TABLE_INBOX_ARTICLES}
+                    (link, title, source, embedding, received_at)
+                VALUES (%s, %s, %s, %s::vector, NOW())
+                ON CONFLICT (link) DO NOTHING;
+                """,
+                (link, art.get("title") or "", art.get("source") or "", emb_str),
+            )
+            count += 1
+    return count
+
+
 def update_feed_states_from_seen(conn, per_feed_max: Dict[str, datetime]) -> None:
     """
     Обновляет last_processed_published_at по каждой ленте по макс. дате среди *увиденных* статей
@@ -610,6 +855,182 @@ def update_feed_states_from_seen(conn, per_feed_max: Dict[str, datetime]) -> Non
                 """,
                 (source, max_dt),
             )
+
+
+# ---------------------------------------------------------------------------
+# Feeds — управление RSS-лентами и подписками пользователей
+# ---------------------------------------------------------------------------
+
+def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, user_id: Optional[int] = None) -> Optional[dict]:
+    """
+    Добавляет ленту в систему и подписывает пользователя.
+    Если лента с таким URL уже существует — берёт её id (не создаёт дубль).
+    Возвращает dict с данными подписки или None при ошибке.
+    """
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO feeds (url, name, favicon_url)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (url) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id, url, name, favicon_url, enabled, error_count, last_fetched_at;
+            """,
+            (url, name, favicon_url),
+        )
+        feed = dict(cur.fetchone())
+        cur.execute(
+            """
+            INSERT INTO user_feeds (feed_id, user_id)
+            VALUES (%s, %s)
+            ON CONFLICT (feed_id, user_id) DO NOTHING;
+            """,
+            (feed["id"], user_id),
+        )
+        return feed
+
+
+def list_feeds(conn, user_id: Optional[int] = None) -> List[dict]:
+    """
+    Возвращает все ленты на которые подписан пользователь.
+    Делает JOIN feeds + user_feeds — берёт глобальные данные и пользовательские настройки.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
+                   f.error_count, f.last_fetched_at, f.last_error,
+                   uf.folder_id, uf.position
+            FROM feeds f
+            JOIN user_feeds uf ON uf.feed_id = f.id AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL))
+            ORDER BY uf.position ASC, f.name ASC;
+            """,
+            (user_id, user_id),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def delete_feed(conn, feed_id: int, user_id: Optional[int] = None) -> bool:
+    """
+    Удаляет подписку пользователя на ленту (запись из user_feeds).
+    Саму ленту в feeds не трогает — другие пользователи могут быть подписаны.
+    Возвращает True если подписка была найдена и удалена.
+    """
+    if conn is None:
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM user_feeds
+            WHERE feed_id = %s AND (user_id = %s OR (user_id IS NULL AND %s IS NULL));
+            """,
+            (feed_id, user_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> Optional[dict]:
+    """
+    Обновляет пользовательские настройки подписки: name, enabled, folder_id, position.
+    Возвращает обновлённую запись или None если подписка не найдена.
+    """
+    if conn is None:
+        return None
+    allowed = {"folder_id", "position"}
+    feed_allowed = {"name", "enabled"}
+    user_updates = {k: v for k, v in kwargs.items() if k in allowed}
+    feed_updates = {k: v for k, v in kwargs.items() if k in feed_allowed}
+
+    with conn.cursor() as cur:
+        if feed_updates:
+            set_clause = ", ".join(f"{k} = %s" for k in feed_updates)
+            cur.execute(
+                f"UPDATE feeds SET {set_clause} WHERE id = %s;",
+                list(feed_updates.values()) + [feed_id],
+            )
+        if user_updates:
+            set_clause = ", ".join(f"{k} = %s" for k in user_updates)
+            cur.execute(
+                f"UPDATE user_feeds SET {set_clause} WHERE feed_id = %s AND (user_id = %s OR (user_id IS NULL AND %s IS NULL));",
+                list(user_updates.values()) + [feed_id, user_id, user_id],
+            )
+        cur.execute(
+            """
+            SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
+                   f.error_count, f.last_fetched_at, f.last_error,
+                   uf.folder_id, uf.position
+            FROM feeds f
+            JOIN user_feeds uf ON uf.feed_id = f.id
+            WHERE f.id = %s AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL));
+            """,
+            (feed_id, user_id, user_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def update_feed_status(conn, url: str, error: Optional[str] = None) -> None:
+    """
+    Вызывается сборщиком после каждой попытки опросить ленту.
+    При успехе (error=None): обнуляет error_count, обновляет last_fetched_at.
+    При ошибке: записывает текст в last_error, инкрементирует error_count.
+    """
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        if error is None:
+            cur.execute(
+                """
+                UPDATE feeds SET error_count = 0, last_error = NULL, last_fetched_at = NOW()
+                WHERE url = %s;
+                """,
+                (url,),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE feeds SET error_count = error_count + 1, last_error = %s
+                WHERE url = %s;
+                """,
+                (error, url),
+            )
+
+
+def get_feeds_as_dict(conn) -> dict:
+    """
+    Возвращает все активные ленты из user_feeds в формате {name: url}
+    для передачи в collect_articles_for_window().
+    Если таблица пустая — возвращает пустой dict (fallback на config).
+    """
+    if conn is None:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT f.name, f.url
+            FROM feeds f
+            JOIN user_feeds uf ON uf.feed_id = f.id
+            WHERE f.enabled = TRUE;
+            """
+        )
+        rows = cur.fetchall()
+        return {r["name"]: r["url"] for r in rows}
+
+def load_feed_url_id_map(conn) -> Dict[str, int]:
+    """
+    Возвращает словарь {url: feed_id} для всех лент в таблице feeds.
+
+    Используется сборщиком чтобы проставить feed_id на каждую статью
+    в момент сохранения — без зависимости от строкового ключа source.
+    """
+    if conn is None:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, url FROM feeds;")
+        return {row["url"]: row["id"] for row in cur.fetchall()}
 
 
 def load_feed_states(conn) -> Dict[str, datetime]:
@@ -670,16 +1091,19 @@ def update_state_with_articles(conn, articles: Iterable[Dict]) -> None:
             if not link or not source:
                 continue
 
+            feed_id = art.get("feed_id")
+
             cur.execute(
                 f"""
-                INSERT INTO {POSTGRES_TABLE_PROCESSED_ARTICLES} (source, link, published_at, title, summary)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO {POSTGRES_TABLE_PROCESSED_ARTICLES} (source, link, published_at, title, summary, feed_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (link) DO UPDATE SET
-                    title = EXCLUDED.title,
+                    title   = EXCLUDED.title,
                     summary = EXCLUDED.summary,
-                    published_at = COALESCE(EXCLUDED.published_at, {POSTGRES_TABLE_PROCESSED_ARTICLES}.published_at);
+                    published_at = COALESCE(EXCLUDED.published_at, {POSTGRES_TABLE_PROCESSED_ARTICLES}.published_at),
+                    feed_id = COALESCE(EXCLUDED.feed_id, {POSTGRES_TABLE_PROCESSED_ARTICLES}.feed_id);
                 """,
-                (source, link, published_dt, title, summary),
+                (source, link, published_dt, title, summary, feed_id),
             )
 
         # Обновление last_processed_published_at по каждому источнику
@@ -708,3 +1132,137 @@ def update_state_with_articles(conn, articles: Iterable[Dict]) -> None:
                 (source, max_dt),
             )
 
+
+# ─────────────────────────────────────────────────────────────
+#  Сценарий 1.2 — Каталог лент
+# ─────────────────────────────────────────────────────────────
+
+def import_catalog_feeds(conn) -> int:
+    """
+    Импортирует ленты из config.RSS_FEEDS в таблицу feeds с флагом is_catalog=True.
+
+    Вызывается при старте сервера. Ленты которые уже есть в таблице не перезаписываются
+    (ON CONFLICT DO NOTHING). Возвращает количество новых записей.
+    """
+    if conn is None:
+        return 0
+    from urllib.parse import urlparse
+    count = 0
+    with conn.cursor() as cur:
+        for name, url in RSS_FEEDS.items():
+            if not url:
+                continue
+            domain = urlparse(url).netloc
+            favicon_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
+            cur.execute(
+                """
+                INSERT INTO feeds (url, name, favicon_url, is_catalog, enabled)
+                VALUES (%s, %s, %s, TRUE, TRUE)
+                ON CONFLICT (url) DO UPDATE SET is_catalog = TRUE
+                RETURNING (xmax = 0) AS inserted;
+                """,
+                (url, name, favicon_url),
+            )
+            row = cur.fetchone()
+            if row and row["inserted"]:
+                count += 1
+    conn.commit()
+    logger.info("import_catalog_feeds: добавлено %d новых лент в каталог", count)
+    return count
+
+
+def refresh_catalog_stats(conn) -> None:
+    """
+    Пересчитывает статистику для всех каталожных лент и сохраняет в feed_catalog_stats.
+
+    Для каждой ленты считает:
+    - subscribers    — кол-во пользователей подписанных через user_feeds
+    - posts_per_week — кол-во постов в неделю за последние 30 дней (целое число)
+    - last_post_at   — дата последней статьи за всё время (без ограничения 30 дней)
+
+    Связь со статьями: сначала по feed_id (надёжно), фоллбэк на source = feeds.name
+    для старых статей собранных до добавления feed_id.
+
+    Вызывается при старте сервера и раз в час планировщиком.
+    """
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, name FROM feeds WHERE is_catalog = TRUE;")
+        feeds = cur.fetchall()
+
+        for feed in feeds:
+            feed_id = feed["id"]
+            feed_name = feed["name"]
+
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM user_feeds WHERE feed_id = %s;",
+                (feed_id,),
+            )
+            subscribers = cur.fetchone()["cnt"]
+
+            cur.execute(
+                f"""
+                SELECT
+                    ROUND(
+                        COUNT(*) FILTER (WHERE published_at > NOW() - INTERVAL '30 days')
+                        / 30.0 * 7
+                    ) AS posts_per_week,
+                    MAX(published_at) AS last_post_at
+                FROM {POSTGRES_TABLE_PROCESSED_ARTICLES}
+                WHERE feed_id = %s
+                   OR (feed_id IS NULL AND source = %s);
+                """,
+                (feed_id, feed_name),
+            )
+            stats = cur.fetchone()
+            posts_per_week = int(stats["posts_per_week"] or 0)
+            last_post_at = stats["last_post_at"]
+
+            cur.execute(
+                """
+                INSERT INTO feed_catalog_stats
+                    (feed_id, subscribers, posts_per_week, last_post_at, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (feed_id) DO UPDATE SET
+                    subscribers    = EXCLUDED.subscribers,
+                    posts_per_week = EXCLUDED.posts_per_week,
+                    last_post_at   = EXCLUDED.last_post_at,
+                    updated_at     = NOW();
+                """,
+                (feed_id, subscribers, posts_per_week, last_post_at),
+            )
+    conn.commit()
+    logger.info("refresh_catalog_stats: статистика обновлена для %d лент", len(feeds))
+
+
+def list_catalog_feeds(conn, user_id=None):
+    """
+    Возвращает все ленты каталога (is_catalog=True) со статистикой и флагом подписки.
+
+    Флаг is_subscribed=True если пользователь уже подписан на ленту через user_feeds.
+    Статистика берётся из кэша feed_catalog_stats — быстро.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                f.id, f.url, f.name, f.favicon_url, f.enabled,
+                f.error_count, f.last_fetched_at,
+                COALESCE(s.subscribers, 0)    AS subscribers,
+                COALESCE(s.posts_per_week, 0) AS posts_per_week,
+                s.last_post_at,
+                CASE WHEN uf.feed_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_subscribed
+            FROM feeds f
+            LEFT JOIN feed_catalog_stats s ON s.feed_id = f.id
+            LEFT JOIN user_feeds uf
+                ON uf.feed_id = f.id
+               AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL))
+            WHERE f.is_catalog = TRUE
+            ORDER BY f.name;
+            """,
+            (user_id, user_id),
+        )
+        return [dict(row) for row in cur.fetchall()]

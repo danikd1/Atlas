@@ -46,6 +46,16 @@
       </section>
 
       <section class="card">
+        <div class="card__header">
+          <h2 class="card__title">Мои ленты</h2>
+          <button type="button" id="feed-add-btn" class="btn btn--secondary btn--sm">+ Добавить по URL</button>
+        </div>
+        <div id="feeds-list" class="feeds-list" aria-live="polite">
+          <p class="feeds-empty">Нет подписок. Добавьте ленту по URL.</p>
+        </div>
+      </section>
+
+      <section class="card">
         <h2 class="card__title">Коллекции</h2>
         <p class="card__desc">После запуска пайплайна здесь появятся коллекции. Откройте коллекцию — увидите список статей и Q&A по ним.</p>
         <button type="button" id="collections-refresh" class="btn btn--secondary">Обновить список</button>
@@ -59,6 +69,7 @@
         <a href="#/" class="back-link">← К коллекциям</a>
         <h1 id="collection-title" class="collection-title">Коллекция</h1>
         <p id="collection-meta" class="collection-meta"></p>
+        <p id="collection-description" class="collection-description" hidden></p>
       </div>
 
       <section class="card">
@@ -70,6 +81,17 @@
       <section class="card card--digest">
         <h2 class="card__title">Дайджест</h2>
         <p class="card__desc">Сформировать дайджест по разделам: ключевые тренды, методы и подходы, инструменты, кейсы.</p>
+        <div class="digest-period">
+          <div class="form-group form-group--inline">
+            <label for="digest-from" class="label">С</label>
+            <input type="date" id="digest-from" class="input input--date" />
+          </div>
+          <div class="form-group form-group--inline">
+            <label for="digest-to" class="label">По</label>
+            <input type="date" id="digest-to" class="input input--date" />
+          </div>
+          <button type="button" id="digest-clear-dates" class="btn btn--ghost btn--sm">Сбросить</button>
+        </div>
         <button type="button" id="digest-build" class="btn btn--primary">Создать дайджест</button>
         <div id="digest-result" class="digest-result" aria-live="polite" hidden></div>
       </section>
@@ -88,6 +110,29 @@
     <footer class="footer">
       <p>API: <a href="/api/health" target="_blank" rel="noopener">/api/health</a></p>
     </footer>
+  </div>
+
+  <!-- Модальное окно: добавить ленту по URL -->
+  <div id="modal-add-feed" class="modal-overlay" hidden aria-modal="true" role="dialog">
+    <div class="modal-add-feed">
+      <h2 class="modal__title">Добавить ленту по URL</h2>
+      <div class="form-group">
+        <label for="feed-url-input" class="label">URL RSS-ленты</label>
+        <div class="form-row">
+          <input type="url" id="feed-url-input" class="input input--wide" placeholder="https://habr.com/ru/rss/hubs/python/articles/" autocomplete="off" />
+          <button type="button" id="feed-validate-btn" class="btn btn--secondary">Проверить</button>
+        </div>
+        <p id="feed-url-error" class="field-error" hidden></p>
+      </div>
+      <div id="feed-preview" class="feed-preview" hidden>
+        <img id="feed-preview-favicon" class="feed-preview__favicon" src="" alt="" width="20" height="20" />
+        <input type="text" id="feed-name-input" class="input input--wide" placeholder="Название ленты" />
+      </div>
+      <div class="modal__actions">
+        <button type="button" id="feed-cancel-btn" class="btn btn--ghost">Отмена</button>
+        <button type="button" id="feed-submit-btn" class="btn btn--primary" disabled>Добавить</button>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

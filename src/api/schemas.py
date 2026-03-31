@@ -238,6 +238,7 @@ class CollectionItem(BaseModel):
 
     id: int = Field(description="Уникальный идентификатор коллекции.", examples=[3])
     name: str = Field(description="Название коллекции.", examples=["DevOps практики"])
+    description: Optional[str] = Field(default=None, description="Краткое описание коллекции.", examples=["Статьи о гибких методологиях разработки: Agile, Scrum, спринты."])
     discipline: Optional[str] = Field(default=None, description="Дисциплина (верхний уровень таксономии).", examples=["Engineering"])
     ga: Optional[str] = Field(default=None, description="Направление (второй уровень таксономии).", examples=["DevOps"])
     activity: Optional[str] = Field(default=None, description="Активность (третий уровень таксономии).", examples=["CI/CD"])
@@ -245,6 +246,7 @@ class CollectionItem(BaseModel):
     created_at: Optional[datetime] = Field(default=None, description="Дата и время создания коллекции.")
     updated_at: Optional[datetime] = Field(default=None, description="Дата и время последнего изменения.")
     last_refreshed_at: Optional[datetime] = Field(default=None, description="Дата и время последнего обновления данных коллекции пайплайном.")
+    article_count: Optional[int] = Field(default=None, description="Количество уникальных статей в коллекции.")
 
     model_config = {"from_attributes": True}
 
@@ -257,6 +259,66 @@ class CollectionArticle(BaseModel):
     summary: Optional[str] = Field(default=None, description="Краткая аннотация статьи, сформированная LLM.")
     source: Optional[str] = Field(default=None, description="Название источника (домен или RSS-лента).", examples=["dev.to"])
     published_at: Optional[datetime] = Field(default=None, description="Дата публикации статьи в источнике.")
+
+
+class FeedValidateRequest(BaseModel):
+    """Запрос на валидацию RSS-ленты по URL перед сохранением."""
+    url: str = Field(..., description="URL RSS-ленты для проверки.", examples=["https://habr.com/ru/rss/hubs/python/articles/"])
+
+
+class FeedValidateResponse(BaseModel):
+    """Результат валидации RSS-ленты."""
+    valid: bool = Field(description="True если URL является рабочим RSS/Atom фидом.")
+    name: Optional[str] = Field(default=None, description="Название ленты из тега <title>.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа сайта.")
+    error: Optional[str] = Field(default=None, description="Текст ошибки если valid=False.")
+
+
+class FeedCreate(BaseModel):
+    """Данные для создания новой подписки на ленту."""
+    url: str = Field(..., description="URL RSS-ленты.")
+    name: str = Field(..., description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа — берётся из ответа /validate.")
+    folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели (опционально).")
+
+
+class FeedItem(BaseModel):
+    """Лента пользователя — данные для отображения в боковой панели."""
+    id: int = Field(description="Уникальный ID ленты.")
+    url: str = Field(description="URL RSS-ленты.")
+    name: str = Field(description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    enabled: bool = Field(description="Активна ли лента (участвует ли в сборе).")
+    error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
+    last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз успешно обновлялась.")
+    last_error: Optional[str] = Field(default=None, description="Текст последней ошибки.")
+    folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели.")
+
+    model_config = {"from_attributes": True}
+
+
+class FeedUpdate(BaseModel):
+    """Изменяемые поля подписки на ленту."""
+    name: Optional[str] = Field(default=None, description="Новое название.")
+    enabled: Optional[bool] = Field(default=None, description="Включить или выключить ленту.")
+    folder_id: Optional[int] = Field(default=None, description="Переместить в папку (None = корень).")
+
+
+class CatalogFeedItem(BaseModel):
+    """Лента из каталога — расширяет FeedItem статистикой и флагом подписки."""
+    id: int = Field(description="Уникальный ID ленты.")
+    url: str = Field(description="URL RSS-ленты.")
+    name: str = Field(description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    enabled: bool = Field(description="Активна ли лента.")
+    error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
+    last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз обновлялась.")
+    subscribers: int = Field(default=0, description="Кол-во пользователей подписанных на ленту.")
+    posts_per_week: int = Field(default=0, description="Среднее кол-во постов в неделю за последние 30 дней.")
+    last_post_at: Optional[datetime] = Field(default=None, description="Дата последней статьи из ленты.")
+    is_subscribed: bool = Field(default=False, description="Подписан ли текущий пользователь на ленту.")
+
+    model_config = {"from_attributes": True}
 
 
 def serialize_digest_section_item(obj: Any) -> Any:

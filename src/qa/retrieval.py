@@ -17,7 +17,7 @@ from config.config import (
     POSTGRES_ENABLED,
     POSTGRES_TABLE_RAG_DOCUMENTS,
 )
-from src.embedding_filter import get_embedding_model
+from src.pipeline.embedding_filter import get_embedding_model
 from src.tools.db_state import get_connection
 
 

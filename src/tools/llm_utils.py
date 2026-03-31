@@ -91,13 +91,23 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
 def create_gigachat_client() -> GigaChat:
     """
     Создает новый клиент GigaChat.
-    
+
+    FastAPI запускает синхронные эндпоинты в AnyIO worker thread, где нет
+    event loop. GigaChat при инициализации вызывает asyncio.get_event_loop()
+    внутри — создаём loop вручную если его нет.
+
     Returns:
         Экземпляр GigaChat
-        
+
     Raises:
         RuntimeError: Если не удалось создать клиент
     """
+    import asyncio
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     try:
         logger.info(f"Инициализация GigaChat клиента (модель: {GIGACHAT_MODEL})...")
         client = GigaChat(

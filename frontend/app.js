@@ -92,6 +92,7 @@
       currentCollectionId = null;
       showPage("home");
       loadCollections();
+      loadFeeds();
     }
   }
 
@@ -175,8 +176,13 @@
         openBtn.addEventListener("click", function () {
           window.location.hash = "#/collection/" + c.id;
         });
+        const articleCountLabel = c.article_count != null
+          ? '<span class="collection-item__count">' + c.article_count + ' статей</span>'
+          : "";
         div.innerHTML =
           '<span class="collection-item__name">' + escapeHtml(c.name) + "</span>" +
+          articleCountLabel +
+          (c.description ? '<span class="collection-item__description">' + escapeHtml(c.description) + "</span>" : "") +
           '<span class="collection-item__meta">' + escapeHtml(meta) + "</span>" +
           '<span class="collection-item__id">id: ' + c.id + "</span>";
         div.appendChild(openBtn);
@@ -219,13 +225,30 @@
     }
 
     try {
-      const [coll, articles] = await Promise.all([
+      const [coll, articles, dateRange] = await Promise.all([
         api("GET", "/api/collections/" + collectionId),
         api("GET", "/api/collections/" + collectionId + "/articles"),
+        api("GET", "/api/collections/" + collectionId + "/date-range"),
       ]);
+
+      if (digestFromInput && digestToInput && dateRange) {
+        const min = dateRange.min_date || "";
+        const max = dateRange.max_date || "";
+        digestFromInput.min = min;
+        digestFromInput.max = max;
+        digestFromInput.value = min;
+        digestToInput.min = min;
+        digestToInput.max = max;
+        digestToInput.value = max;
+      }
       collectionTitleEl.textContent = coll.name || "Коллекция";
       const meta = [coll.discipline, coll.ga, coll.activity].filter(Boolean).join(" / ") || "—";
       collectionMetaEl.textContent = meta + " (id: " + coll.id + ")";
+      const descEl = document.getElementById("collection-description");
+      if (descEl) {
+        descEl.textContent = coll.description || "";
+        descEl.hidden = !coll.description;
+      }
 
       articlesList.innerHTML = "";
       if (!articles || articles.length === 0) {
@@ -237,10 +260,14 @@
         card.className = "article-card";
         const title = (a.title || a.link || "Без названия").trim();
         const summary = (a.summary || "").trim();
+        const dateStr = a.published_at ? new Date(a.published_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }) : "";
         card.innerHTML =
           '<div class="article-card__title"><a href="' + escapeHtml(a.link) + '" target="_blank" rel="noopener">' + escapeHtml(title) + "</a></div>" +
           (summary ? '<div class="article-card__summary">' + escapeHtml(summary) + "</div>" : "") +
-          '<div class="article-card__link"><a href="' + escapeHtml(a.link) + '" target="_blank" rel="noopener">' + escapeHtml(a.link) + "</a></div>";
+          '<div class="article-card__meta">' +
+            (a.source ? '<span class="article-card__source">' + escapeHtml(a.source) + "</span>" : "") +
+            (dateStr ? '<span class="article-card__date">' + escapeHtml(dateStr) + "</span>" : "") +
+          "</div>";
         articlesList.appendChild(card);
       });
     } catch (e) {
@@ -248,6 +275,17 @@
       collectionMetaEl.textContent = "";
       articlesList.innerHTML = '<p class="result-box error">' + escapeHtml(e.message) + "</p>";
     }
+  }
+
+  const digestFromInput = document.getElementById("digest-from");
+  const digestToInput = document.getElementById("digest-to");
+  const digestClearBtn = document.getElementById("digest-clear-dates");
+
+  if (digestClearBtn) {
+    digestClearBtn.addEventListener("click", function () {
+      if (digestFromInput) digestFromInput.value = "";
+      if (digestToInput) digestToInput.value = "";
+    });
   }
 
   if (digestBuildBtn && digestResult) {
@@ -258,7 +296,15 @@
       digestResult.hidden = false;
       digestResult.innerHTML = '<p class="result-box loading"><span class="spinner"></span>Формирование дайджеста…</p>';
       try {
-        var data = await api("GET", "/api/digest/" + cid);
+        var params = new URLSearchParams();
+        if (digestFromInput && digestFromInput.value) {
+          params.append("from_date", digestFromInput.value + "T00:00:00");
+        }
+        if (digestToInput && digestToInput.value) {
+          params.append("to_date", digestToInput.value + "T23:59:59");
+        }
+        var url = "/api/digest/" + cid + (params.toString() ? "?" + params.toString() : "");
+        var data = await api("GET", url);
         digestResult.innerHTML = "";
         var wrap = document.createElement("div");
         wrap.className = "digest-box";
@@ -304,6 +350,184 @@
         digestBuildBtn.disabled = false;
       }
     });
+  }
+
+  // ——— Ленты ———
+
+  const feedsList = document.getElementById("feeds-list");
+  const feedAddBtn = document.getElementById("feed-add-btn");
+  const modal = document.getElementById("modal-add-feed");
+  const feedUrlInput = document.getElementById("feed-url-input");
+  const feedValidateBtn = document.getElementById("feed-validate-btn");
+  const feedUrlError = document.getElementById("feed-url-error");
+  const feedPreview = document.getElementById("feed-preview");
+  const feedPreviewFavicon = document.getElementById("feed-preview-favicon");
+  const feedNameInput = document.getElementById("feed-name-input");
+  const feedCancelBtn = document.getElementById("feed-cancel-btn");
+  const feedSubmitBtn = document.getElementById("feed-submit-btn");
+
+  let _validatedFeedData = null;
+
+  function openFeedModal() {
+    feedUrlInput.value = "";
+    feedNameInput.value = "";
+    feedUrlError.hidden = true;
+    feedPreview.hidden = true;
+    feedSubmitBtn.disabled = true;
+    _validatedFeedData = null;
+    modal.hidden = false;
+    feedUrlInput.focus();
+  }
+
+  function closeFeedModal() {
+    modal.hidden = true;
+  }
+
+  feedAddBtn.addEventListener("click", openFeedModal);
+  feedCancelBtn.addEventListener("click", closeFeedModal);
+  modal.addEventListener("click", function (e) {
+    if (e.target === modal) closeFeedModal();
+  });
+
+  feedValidateBtn.addEventListener("click", async function () {
+    const url = (feedUrlInput.value || "").trim();
+    if (!url) {
+      feedUrlError.textContent = "Введите URL ленты.";
+      feedUrlError.hidden = false;
+      return;
+    }
+    feedValidateBtn.disabled = true;
+    feedValidateBtn.textContent = "Проверка…";
+    feedUrlError.hidden = true;
+    feedPreview.hidden = true;
+    feedSubmitBtn.disabled = true;
+    _validatedFeedData = null;
+    try {
+      const data = await api("POST", "/api/feeds/validate", { url });
+      if (!data.valid) {
+        feedUrlError.textContent = data.error || "Не удалось распознать RSS-ленту.";
+        feedUrlError.hidden = false;
+      } else {
+        feedPreviewFavicon.src = data.favicon_url || "";
+        feedNameInput.value = data.name || url;
+        feedPreview.hidden = false;
+        feedSubmitBtn.disabled = false;
+        _validatedFeedData = { url, favicon_url: data.favicon_url };
+      }
+    } catch (e) {
+      feedUrlError.textContent = e.message;
+      feedUrlError.hidden = false;
+    } finally {
+      feedValidateBtn.disabled = false;
+      feedValidateBtn.textContent = "Проверить";
+    }
+  });
+
+  feedSubmitBtn.addEventListener("click", async function () {
+    if (!_validatedFeedData) return;
+    const name = (feedNameInput.value || "").trim();
+    if (!name) {
+      feedNameInput.focus();
+      return;
+    }
+    feedSubmitBtn.disabled = true;
+    feedSubmitBtn.textContent = "Добавление…";
+    try {
+      await api("POST", "/api/feeds", {
+        url: _validatedFeedData.url,
+        name,
+        favicon_url: _validatedFeedData.favicon_url,
+      });
+      closeFeedModal();
+      await loadFeeds();
+    } catch (e) {
+      feedUrlError.textContent = e.message;
+      feedUrlError.hidden = false;
+    } finally {
+      feedSubmitBtn.disabled = false;
+      feedSubmitBtn.textContent = "Добавить";
+    }
+  });
+
+  async function loadFeeds() {
+    if (!feedsList) return;
+    try {
+      const feeds = await api("GET", "/api/feeds");
+      if (!feeds || feeds.length === 0) {
+        feedsList.innerHTML = '<p class="feeds-empty">Нет подписок. Добавьте ленту по URL.</p>';
+        return;
+      }
+      feedsList.innerHTML = "";
+      feeds.forEach(function (feed) {
+        const item = document.createElement("div");
+        item.className = "feed-item" +
+          (!feed.enabled ? " feed-item--disabled" : "") +
+          (feed.error_count > 0 ? " feed-item--error" : "");
+        item.dataset.id = feed.id;
+
+        const favicon = document.createElement("img");
+        favicon.className = "feed-item__favicon";
+        favicon.src = feed.favicon_url || "";
+        favicon.width = 16;
+        favicon.height = 16;
+        favicon.alt = "";
+        favicon.onerror = function () { this.style.display = "none"; };
+
+        const name = document.createElement("span");
+        name.className = "feed-item__name";
+        name.textContent = feed.name;
+
+        if (feed.error_count > 0) {
+          const warn = document.createElement("span");
+          warn.className = "feed-item__warn";
+          warn.title = feed.last_error || "Ошибки при сборе";
+          warn.textContent = "⚠";
+          item.appendChild(favicon);
+          item.appendChild(name);
+          item.appendChild(warn);
+        } else {
+          item.appendChild(favicon);
+          item.appendChild(name);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "feed-item__actions";
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.className = "btn-icon";
+        toggleBtn.title = feed.enabled ? "Выключить" : "Включить";
+        toggleBtn.textContent = feed.enabled ? "⏸" : "▶";
+        toggleBtn.addEventListener("click", async function () {
+          try {
+            await api("PATCH", "/api/feeds/" + feed.id, { enabled: !feed.enabled });
+            await loadFeeds();
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "btn-icon btn-icon--danger";
+        deleteBtn.title = "Удалить ленту";
+        deleteBtn.textContent = "✕";
+        deleteBtn.addEventListener("click", async function () {
+          if (!confirm("Удалить ленту «" + feed.name + "»?")) return;
+          try {
+            await api("DELETE", "/api/feeds/" + feed.id);
+            await loadFeeds();
+          } catch (e) {
+            alert(e.message);
+          }
+        });
+
+        actions.appendChild(toggleBtn);
+        actions.appendChild(deleteBtn);
+        item.appendChild(actions);
+        feedsList.appendChild(item);
+      });
+    } catch (e) {
+      feedsList.innerHTML = '<p class="feeds-empty">Ошибка загрузки лент: ' + escapeHtml(e.message) + "</p>";
+    }
   }
 
   qaSubmit.addEventListener("click", async function () {

@@ -18,7 +18,7 @@ from config.config import (
     EMBEDDING_MODEL_NAME,
 )
 
-from .tools.llm_utils import clean_text_for_llm
+from ..tools.llm_utils import clean_text_for_llm
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from langgraph.graph import END, START, StateGraph
 
-from src.taxonomy import format_taxonomy_for_router_prompt, load_taxonomy
+from src.pipeline.taxonomy import format_taxonomy_for_router_prompt, load_taxonomy
 
 from .router_prompt import get_router_system_prompt
 

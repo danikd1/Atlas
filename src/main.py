@@ -10,12 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .embedding_filter import filter_articles_by_embedding, get_embedding_model
-from .lemmatization_filter import filter_articles_by_keywords
-from .taxonomy import get_keywords_config_for_selection, get_topic_descriptions_per_node, load_taxonomy
+from .pipeline.embedding_filter import filter_articles_by_embedding, get_embedding_model
+from .pipeline.lemmatization_filter import filter_articles_by_keywords
+from .pipeline.taxonomy import get_keywords_config_for_selection, get_topic_descriptions_per_node, load_taxonomy
 from .tools.llm_utils import create_gigachat_client, format_summary_text, summarize_article
 # from .graph import filter_articles_by_relevance  # Закомментировано - не используется
-from .rss_parser import collect_articles_for_window
+from .pipeline.rss_parser import collect_articles_for_window
 from .tools.db_state import (
     get_connection,
     get_or_create_collection,
@@ -331,7 +331,7 @@ def run_pipeline(
     # Запись RAG-документов в rag_documents для выбранной коллекции (эмбеддинги + upsert)
     if conn and collection and not df_relevant.empty:
         try:
-            from .rag_prep import prepare_and_upsert_rag_documents
+            from .pipeline.rag_prep import prepare_and_upsert_rag_documents
             rag_count = prepare_and_upsert_rag_documents(
                 conn, collection, df_relevant, model=embed_model
             )
@@ -405,44 +405,4 @@ def run_pipeline(
     return df_relevant
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Пайплайн сбора и фильтрации статей с Habr.")
-    parser.add_argument(
-        "--query",
-        type=str,
-        default=None,
-        help="Запрос на естественном языке: агент-роутер выберет узлы D/GA/A, пайплайн запустится с этой выборкой.",
-    )
-    parser.add_argument(
-        "--collect",
-        action="store_true",
-        help="Только сбор из RSS (без обработки). Эквивалент POST /api/rss/collect.",
-    )
-    args = parser.parse_args()
-
-    if args.collect:
-        collect_rss()
-    elif args.query:
-        from .agents.router import run_router, router_output_to_taxonomy_selection
-        print("Запрос к агенту-роутеру: выбор узлов таксономии по запросу...")
-        router_out = run_router(args.query)
-        selection = router_output_to_taxonomy_selection(router_out)
-        if router_out.get("clarification_needed") and router_out.get("clarification_question"):
-            print("Требуется уточнение:", router_out["clarification_question"])
-            print("   Запустите снова с уточнённым запросом (--query \"...\") или без --query для конфига.")
-            raise SystemExit(1)
-        if router_out.get("status") == "not_found" or selection is None:
-            print("По запросу не найден подходящий узел таксономии (status=not_found). Запуск с TAXONOMY_SELECTION из config.")
-            selection = None
-            collection_name = None
-        else:
-            print(f"   Выборка: D={selection.get('discipline')}, GA={selection.get('ga')}, A={selection.get('activity')}")
-            try:
-                raw_name = input("Введите имя коллекции (Enter — имя по умолчанию): ").strip()
-            except EOFError:
-                raw_name = ""
-            collection_name = raw_name or None
-        run_pipeline(taxonomy_selection_override=selection, collection_name=collection_name)
-    else:
-        run_pipeline()
 

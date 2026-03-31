@@ -48,7 +48,7 @@ N_CATEGORIES: int = int(os.environ.get("N_CATEGORIES", "10"))
 OUTPUT_DIR = Path("bertopic_output_2")
 # ───────────────────────────────────────────────────────────────────────────
 
-PROJECT_ROOT = Path(__file__).parent
+PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
@@ -133,7 +133,7 @@ def compute_embeddings(docs: List[str], batch_size: int = 64) -> np.ndarray:
     Вычисляет эмбеддинги через модель из config (sentence-transformers).
     Та же модель, что используется в пайплайне — результаты совместимы.
     """
-    from src.embedding_filter import get_embedding_model
+    from src.pipeline.embedding_filter import get_embedding_model
     from config.config import DEFAULT_EMBED_BATCH_SIZE
 
     model = get_embedding_model()
@@ -536,12 +536,24 @@ def main() -> None:
     save_html_reports(topic_model, docs)
     save_csv(topic_model, topics, meta)
 
+    # ── [6/6] Сохраняем BERTopic-модель ───────────────────────────────────
+    print(f"\n[6/6] Сохраняем BERTopic-модель...")
+    models_dir = Path("models")
+    models_dir.mkdir(exist_ok=True)
+    model_path = str(models_dir / "bertopic_model")
+    try:
+        topic_model.save(model_path)
+        print(f"  ✓ Модель сохранена: {model_path}/")
+    except Exception as e:
+        print(f"  ⚠ Не удалось сохранить модель: {e}")
+
     print("\n" + "=" * 76)
     print("  Что смотреть:")
     print(f"  • По категориям:  {OUTPUT_DIR}/topics_map_overview.html")
     print(f"  • Категория N:    {OUTPUT_DIR}/topics_map_cat_NN.html")
     print(f"  • Иерархия:       {OUTPUT_DIR}/topics_hierarchy.html")
     print(f"  • Таблица тем:    {OUTPUT_DIR}/topics_categories.csv")
+    print(f"  • Модель:         models/bertopic_model/")
     print("=" * 76)
 
 

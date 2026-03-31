@@ -9,7 +9,10 @@ ReDoc:       http://localhost:8000/redoc
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +20,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .schemas import (
+    CatalogFeedItem,
     CollectionArticle,
     CollectionItem,
+    FeedCreate,
+    FeedItem,
+    FeedUpdate,
+    FeedValidateRequest,
+    FeedValidateResponse,
     PipelineRunRequest,
     PipelineRunResponse,
     QARequest,
@@ -32,6 +41,25 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from src.tools.db_state import (
+        get_connection,
+        ensure_tables,
+        import_catalog_feeds,
+        refresh_catalog_stats,
+    )
+    conn = get_connection()
+    ensure_tables(conn)
+    logger.info("БД инициализирована: все таблицы созданы.")
+    imported = import_catalog_feeds(conn)
+    logger.info("Каталог лент: импортировано %d новых лент из config.RSS_FEEDS.", imported)
+    refresh_catalog_stats(conn)
+    logger.info("Статистика каталога обновлена.")
+    yield
+
 
 _TAGS_METADATA = [
     {
@@ -58,9 +86,18 @@ _TAGS_METADATA = [
     {
         "name": "Дайджест",
     },
+    {
+        "name": "Ленты",
+        "description": "Управление RSS-лентами и подписками пользователей.",
+    },
+    {
+        "name": "Каталог",
+        "description": "Системный каталог лент из config.RSS_FEEDS — подписка/отписка одним кликом.",
+    },
 ]
 
 app = FastAPI(
+    lifespan=lifespan,
     title="Content Intelligence Platform",
     description=(
         "API системы автоматизированного сбора, фильтрации и интеллектуального поиска "
@@ -296,29 +333,184 @@ def qa_ask(body: QARequest):
 
 
 @app.get(
+    "/api/collections/{collection_id}/date-range",
+    tags=["Коллекции"],
+    summary="Диапазон дат статей в коллекции",
+)
+def get_collection_date_range(collection_id: int):
+    """Возвращает min/max published_at статей в коллекции для ограничения date picker."""
+    from src.tools.db_state import get_connection
+    from config.config import POSTGRES_TABLE_RAG_DOCUMENTS
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="БД недоступна")
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT MIN(published_at), MAX(published_at) FROM {POSTGRES_TABLE_RAG_DOCUMENTS} WHERE collection_id = %s AND published_at IS NOT NULL",
+            (collection_id,),
+        )
+        row = cur.fetchone()
+    min_dt = row["min"] if row else None
+    max_dt = row["max"] if row else None
+    return {
+        "min_date": min_dt.date().isoformat() if min_dt else None,
+        "max_date": max_dt.date().isoformat() if max_dt else None,
+    }
+
+
+@app.get(
     "/api/digest/{collection_id}",
     tags=["Дайджест"],
     summary="Сформировать дайджест по коллекции",
     response_description="Структурированный дайджест по четырём разделам",
     responses={500: {"description": "Ошибка при формировании дайджеста"}},
 )
-def get_digest(collection_id: int):
+def get_digest(
+    collection_id: int,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+):
     """
     **Разделы дайджеста:** Тренды, Методы и подходы, Инструменты и технологии, Кейсы и примеры.
+
+    Опциональные параметры:
+    - **from_date** — начало периода (ISO 8601, например `2024-01-01T00:00:00`)
+    - **to_date** — конец периода (ISO 8601, например `2024-03-01T00:00:00`)
     """
     try:
-        from src.digest.digest_builder import build_digest, DigestResult
-        result: DigestResult = build_digest(collection_id)
+        from src.digest.digest_builder import build_digest, DigestOptions, DigestResult
+        options = DigestOptions(from_date=from_date, to_date=to_date)
+        result: DigestResult = build_digest(collection_id, options=options)
         return {
             "title": result.title,
             "collection_id": result.collection_id,
             "collection_meta": result.collection_meta,
             "generated_at": result.generated_at,
+            "from_date": from_date.isoformat() if from_date else None,
+            "to_date": to_date.isoformat() if to_date else None,
             "sections": serialize_digest_section_item(result.sections),
         }
     except Exception as e:
         logger.exception("Digest error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Ленты — управление RSS-лентами и подписками
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/api/feeds/validate",
+    tags=["Ленты"],
+    summary="Проверить RSS-ленту по URL",
+    response_model=FeedValidateResponse,
+)
+def validate_feed(body: FeedValidateRequest):
+    """
+    Проверяет URL до сохранения: делает GET-запрос и парсит как RSS/Atom.
+    Возвращает название и favicon если лента валидна, иначе — ошибку.
+    Ничего в БД не пишет.
+    """
+    import feedparser
+    from urllib.parse import urlparse
+    try:
+        feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
+        import socket; socket.setdefaulttimeout(10)
+        if feed.bozo and not feed.entries:
+            return FeedValidateResponse(valid=False, error="Не удалось распознать RSS-ленту")
+        name = feed.feed.get("title") or urlparse(body.url).netloc
+        domain = urlparse(body.url).netloc
+        favicon_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
+        return FeedValidateResponse(valid=True, name=name, favicon_url=favicon_url)
+    except Exception as e:
+        return FeedValidateResponse(valid=False, error=str(e))
+
+
+@app.post(
+    "/api/feeds",
+    tags=["Ленты"],
+    summary="Добавить ленту и подписаться",
+    response_model=FeedItem,
+    status_code=201,
+)
+def add_feed(body: FeedCreate):
+    """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует."""
+    from src.tools.db_state import get_connection, ensure_tables, create_feed
+    conn = get_connection()
+    ensure_tables(conn)
+    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url)
+    if not feed:
+        raise HTTPException(status_code=500, detail="Не удалось создать ленту")
+    return FeedItem(**feed)
+
+
+@app.get(
+    "/api/feeds",
+    tags=["Ленты"],
+    summary="Список подписок пользователя",
+    response_model=list[FeedItem],
+)
+def get_feeds():
+    """Возвращает все ленты на которые подписан пользователь. Используется для отрисовки боковой панели."""
+    from src.tools.db_state import get_connection, list_feeds
+    conn = get_connection()
+    return [FeedItem(**f) for f in list_feeds(conn)]
+
+
+@app.delete(
+    "/api/feeds/{feed_id}",
+    tags=["Ленты"],
+    summary="Отписаться от ленты",
+    status_code=204,
+    responses={404: {"description": "Подписка не найдена"}},
+)
+def remove_feed(feed_id: int):
+    """Удаляет подписку пользователя на ленту. Саму ленту не удаляет."""
+    from src.tools.db_state import get_connection, delete_feed
+    conn = get_connection()
+    if not delete_feed(conn, feed_id):
+        raise HTTPException(status_code=404, detail="Подписка не найдена")
+
+
+@app.patch(
+    "/api/feeds/{feed_id}",
+    tags=["Ленты"],
+    summary="Обновить настройки подписки",
+    response_model=FeedItem,
+    responses={404: {"description": "Подписка не найдена"}},
+)
+def patch_feed(feed_id: int, body: FeedUpdate):
+    """Обновляет название, статус (включена/выключена) или папку ленты."""
+    from src.tools.db_state import get_connection, update_feed
+    conn = get_connection()
+    updated = update_feed(conn, feed_id, **body.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Подписка не найдена")
+    return FeedItem(**updated)
+
+
+# ─────────────────────────────────────────────────────────────
+#  Каталог лент (Сценарий 1.2)
+# ─────────────────────────────────────────────────────────────
+
+@app.get(
+    "/api/catalog",
+    tags=["Каталог"],
+    summary="Список лент каталога",
+    response_model=list[CatalogFeedItem],
+    response_description="Все системные ленты со статистикой и флагом подписки",
+)
+def get_catalog():
+    """
+    Возвращает все ленты каталога (из config.RSS_FEEDS) со статистикой:
+    кол-во подписчиков, постов в день, последняя статья.
+    Флаг is_subscribed показывает подписан ли текущий пользователь.
+    Статистика берётся из кэша feed_catalog_stats — обновляется раз в час.
+    """
+    from src.tools.db_state import get_connection, list_catalog_feeds
+    conn = get_connection()
+    rows = list_catalog_feeds(conn)
+    return [CatalogFeedItem(**r) for r in rows]
 
 
 if FRONTEND_DIR.exists():

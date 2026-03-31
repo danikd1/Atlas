@@ -1,7 +1,19 @@
 """
 Конфигурация проекта: RSS-ленты и параметры пайплайна.
 """
+import getpass
 import os
+from enum import Enum
+
+
+class RelevanceStatus(str, Enum):
+    """Статусы релевантности статей."""
+    RELEVANT = "relevant"
+    IRRELEVANT = "irrelevant"
+    NEED_FULLTEXT = "need_fulltext"
+
+    def __str__(self) -> str:
+        return self.value
 
 # RSS-источники
 RSS_FEEDS = {
@@ -272,7 +284,7 @@ GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
 GIGACHAT_SUMMARIZATION_ENABLED: bool = (
     os.environ.get("GIGACHAT_SUMMARIZATION_ENABLED", "true").strip().lower() != "false"
 )
-GIGACHAT_SUMMARIZATION_ENABLED = False
+GIGACHAT_SUMMARIZATION_ENABLED = True
 
 # BART fallback: модель для суммаризации когда GigaChat недоступен.
 # facebook/bart-large-cnn  — английский, ~1.6 GB, высокое качество (по умолчанию)
@@ -296,7 +308,8 @@ POSTGRES_ENABLED = True  # Можно отключить БД, если она �
 POSTGRES_HOST = "localhost"
 POSTGRES_PORT = 5432
 POSTGRES_DB = "postgres"
-POSTGRES_USER = "macbookpro"
+# По умолчанию — текущий пользователь macOS/Linux (как у Homebrew Postgres). Переопределение: POSTGRES_USER=...
+POSTGRES_USER = os.environ.get("POSTGRES_USER") or getpass.getuser()
 POSTGRES_PASSWORD = ""
 
 # Имена таблиц для состояния краулера и RAG-коллекций
@@ -304,6 +317,8 @@ POSTGRES_TABLE_PROCESSED_ARTICLES = "processed_articles"
 POSTGRES_TABLE_FEED_STATE = "last_published_at"
 POSTGRES_TABLE_COLLECTIONS = "collections"
 POSTGRES_TABLE_RAG_DOCUMENTS = "rag_documents"
+POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS = "bertopic_assignments"
+POSTGRES_TABLE_INBOX_ARTICLES = "inbox_articles"
 
 # Размерность вектора эмбеддингов (paraphrase-multilingual-mpnet-base-v2 = 768)
 EMBEDDING_DIM = 768

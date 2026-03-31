@@ -19,12 +19,15 @@ from urllib.error import URLError
 import feedparser
 import pandas as pd
 
-from .tools.db_state import (
+from ..tools.db_state import (
     ensure_tables,
     get_connection,
+    get_feeds_as_dict,
     load_feed_states,
+    load_feed_url_id_map,
     load_processed_links,
     update_feed_states_from_seen,
+    update_feed_status,
     update_state_with_articles,
 )
 logger = logging.getLogger(__name__)
@@ -269,12 +272,20 @@ def collect_articles_for_window(
     Returns:
         Tuple[DataFrame, Dict]: DataFrame со статьями и статистика
     """
-    # Импорт конфига только если нужно
+    from config.config import SUMMARY_TRUNCATE_MAX_CHARS, SUMMARY_TRUNCATE_SOURCE_PREFIXES
+
+    # Если ленты не переданы явно — пробуем взять из БД, fallback на config
     if rss_feeds is None:
-        from config.config import RSS_FEEDS, SUMMARY_TRUNCATE_MAX_CHARS, SUMMARY_TRUNCATE_SOURCE_PREFIXES
-        rss_feeds = RSS_FEEDS
-    else:
-        from config.config import SUMMARY_TRUNCATE_MAX_CHARS, SUMMARY_TRUNCATE_SOURCE_PREFIXES
+        _conn_tmp = get_connection()
+        ensure_tables(_conn_tmp)
+        db_feeds = get_feeds_as_dict(_conn_tmp)
+        if db_feeds:
+            rss_feeds = db_feeds
+            logger.info("RSS: используем %d лент из БД (user_feeds)", len(rss_feeds))
+        else:
+            from config.config import RSS_FEEDS
+            rss_feeds = RSS_FEEDS
+            logger.info("RSS: user_feeds пустая, используем %d лент из config", len(rss_feeds))
     
     # Валидация и обработка дубликатов
     rss_feeds = validate_and_deduplicate_feeds(rss_feeds)
@@ -298,6 +309,8 @@ def collect_articles_for_window(
     processed_links = load_processed_links(conn)
     # Загружаем last_processed_published_at по каждому источнику для фильтрации только новых статей
     feed_states = load_feed_states(conn)
+    # Загружаем {url: feed_id} чтобы проставить feed_id на каждую статью при сохранении
+    feed_url_id_map = load_feed_url_id_map(conn)
 
     all_articles = []  # Список всех собранных статей (уникальные по ссылке)
     seen_links = set()  # Множество уже встреченных ссылок в рамках текущего запуска
@@ -348,6 +361,8 @@ def collect_articles_for_window(
 
                 # Добавляем имя источника (ключ из RSS_FEEDS), чтобы можно было хранить состояние по каждому источнику
                 art["source"] = name
+                # Проставляем feed_id по URL ленты — надёжная связь со статьёй без строкового матча
+                art["feed_id"] = feed_url_id_map.get(url)
 
                 # У части лент в summary приходит полный текст статьи — обрезаем до SUMMARY_TRUNCATE_MAX_CHARS
                 if SUMMARY_TRUNCATE_SOURCE_PREFIXES and any(
@@ -365,9 +380,11 @@ def collect_articles_for_window(
                 all_articles.append(art)
                 per_feed_new_count[name] = per_feed_new_count.get(name, 0) + 1
         
+            update_feed_status(conn, url, error=None)
         except Exception as e:
             feeds_failed += 1
             logger.error(f"Критическая ошибка при обработке ленты '{name}' ({url}): {e}")
+            update_feed_status(conn, url, error=str(e))
             continue
     
     end_time = time.time()

@@ -18,7 +18,7 @@ from config.config import (
 )
 
 from .chunking import chunk_text_recursive
-from .tools.db_state import delete_rag_documents_by_links, upsert_rag_documents
+from ..tools.db_state import delete_rag_documents_by_links, upsert_rag_documents
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,11 @@ def prepare_rag_documents_from_df(
         summary = (row.get("summary") or "").strip()
         source = (row.get("source") or "").strip()
         published_at = row.get("published_dt")
+        try:
+            if pd.isnull(published_at):
+                published_at = None
+        except (TypeError, ValueError):
+            pass
         embed_sim = float(row["embed_similarity"]) if "embed_similarity" in row else None
         full_text = row.get("full_text")
 

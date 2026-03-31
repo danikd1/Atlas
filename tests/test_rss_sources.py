@@ -35,7 +35,7 @@ from config.config import (
     POSTGRES_TABLE_PROCESSED_ARTICLES,
     RSS_FEEDS,
 )
-from src.rss_parser import collect_articles_for_window, parse_rss, validate_and_deduplicate_feeds
+from src.pipeline.rss_parser import collect_articles_for_window, parse_rss, validate_and_deduplicate_feeds
 from src.tools.db_state import get_connection
 from src.tools.text_extraction import add_full_text_column
 

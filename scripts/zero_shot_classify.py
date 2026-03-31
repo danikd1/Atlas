@@ -54,7 +54,7 @@ LIMIT: Optional[int] = (
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.taxonomy import load_taxonomy  # noqa: E402
+from src.pipeline.taxonomy import load_taxonomy  # noqa: E402
 
 
 # ── загрузка статей из БД ──────────────────────────────────────────────────
