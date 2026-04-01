@@ -31,7 +31,7 @@ from config.config import (
     DEFAULT_LIMIT_PER_FEED,
     DEFAULT_LLM_SLEEP,
     GENERIC_SINGLE_LEMMAS,
-    RSS_FEEDS,
+    get_feed_urls,
     TAXONOMY_SELECTION,
 )
 
@@ -82,7 +82,7 @@ def collect_rss(
     """
     _hours_back = hours_back if hours_back is not None else DEFAULT_HOURS_BACK
     _limit = limit_per_feed if limit_per_feed is not None else DEFAULT_LIMIT_PER_FEED
-    _feeds = rss_feeds if rss_feeds is not None else RSS_FEEDS
+    _feeds = rss_feeds if rss_feeds is not None else get_feed_urls()
 
     print("=" * 60)
     print("СБОР СТАТЕЙ ИЗ RSS-ЛЕНТ")

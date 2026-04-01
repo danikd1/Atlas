@@ -105,6 +105,7 @@ def ensure_tables(conn) -> None:
             "title TEXT",
             "summary TEXT",
             "feed_id INT REFERENCES feeds(id) ON DELETE SET NULL",
+            "full_text TEXT",
         ):
             try:
                 cur.execute(
@@ -318,12 +319,20 @@ def ensure_tables(conn) -> None:
                 url             TEXT NOT NULL UNIQUE,
                 name            TEXT NOT NULL,
                 favicon_url     TEXT,
+                category        TEXT,
                 is_catalog      BOOLEAN DEFAULT FALSE,
                 enabled         BOOLEAN DEFAULT TRUE,
                 last_fetched_at TIMESTAMPTZ,
                 last_error      TEXT,
                 error_count     INT DEFAULT 0
             );
+            """
+        )
+
+        # Миграция: добавляем category если таблица уже существует без неё
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS category TEXT;
             """
         )
 
@@ -335,7 +344,39 @@ def ensure_tables(conn) -> None:
                 user_id    INT,
                 folder_id  INT,
                 position   INT DEFAULT 0,
+                hidden     BOOLEAN DEFAULT FALSE,
                 PRIMARY KEY (feed_id, user_id)
+            );
+            """
+        )
+
+        # Папки пользователя для группировки лент в боковой панели.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_folders (
+                id        SERIAL PRIMARY KEY,
+                user_id   INT,
+                name      TEXT NOT NULL,
+                position  INT DEFAULT 0
+            );
+            """
+        )
+
+        # Миграция: добавить hidden если таблица уже существует без этого поля.
+        cur.execute(
+            """
+            ALTER TABLE user_feeds ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE;
+            """
+        )
+
+        # Факты прочтения статей (Сценарий 1.5).
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS article_reads (
+                link     TEXT NOT NULL,
+                user_id  INT  NOT NULL DEFAULT 0,
+                read_at  TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (link, user_id)
             );
             """
         )
@@ -861,23 +902,27 @@ def update_feed_states_from_seen(conn, per_feed_max: Dict[str, datetime]) -> Non
 # Feeds — управление RSS-лентами и подписками пользователей
 # ---------------------------------------------------------------------------
 
-def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, user_id: Optional[int] = None) -> Optional[dict]:
+def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, category: Optional[str] = None, user_id: Optional[int] = None) -> Optional[dict]:
     """
     Добавляет ленту в систему и подписывает пользователя.
     Если лента с таким URL уже существует — берёт её id (не создаёт дубль).
+    В однопользовательском режиме user_id=None → используем 0 как анонимный пользователь.
     Возвращает dict с данными подписки или None при ошибке.
     """
     if conn is None:
         return None
+    _user_id = user_id if user_id is not None else 0
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO feeds (url, name, favicon_url)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET name = EXCLUDED.name
-            RETURNING id, url, name, favicon_url, enabled, error_count, last_fetched_at;
+            INSERT INTO feeds (url, name, favicon_url, category)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (url) DO UPDATE SET
+                name     = EXCLUDED.name,
+                category = COALESCE(EXCLUDED.category, feeds.category)
+            RETURNING id, url, name, favicon_url, category, enabled, error_count, last_fetched_at;
             """,
-            (url, name, favicon_url),
+            (url, name, favicon_url, category),
         )
         feed = dict(cur.fetchone())
         cur.execute(
@@ -886,60 +931,87 @@ def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, us
             VALUES (%s, %s)
             ON CONFLICT (feed_id, user_id) DO NOTHING;
             """,
-            (feed["id"], user_id),
+            (feed["id"], _user_id),
         )
         return feed
 
 
-def list_feeds(conn, user_id: Optional[int] = None) -> List[dict]:
+def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False) -> List[dict]:
     """
-    Возвращает все ленты на которые подписан пользователь.
-    Делает JOIN feeds + user_feeds — берёт глобальные данные и пользовательские настройки.
+    Возвращает ленты на которые подписан пользователь.
+    По умолчанию скрытые ленты (hidden=True) не возвращаются.
+    include_hidden=True используется на странице настроек.
+    В однопользовательском режиме user_id=None → используем 0.
     """
     if conn is None:
         return []
+    _user_id = user_id if user_id is not None else 0
+    hidden_filter = "" if include_hidden else "AND uf.hidden = FALSE"
     with conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
                    f.error_count, f.last_fetched_at, f.last_error,
-                   uf.folder_id, uf.position
+                   uf.folder_id, uf.position, uf.hidden,
+                   COUNT(pa.link) FILTER (
+                       WHERE pa.link IS NOT NULL
+                         AND ar.link IS NULL
+                   ) AS unread_count
             FROM feeds f
-            JOIN user_feeds uf ON uf.feed_id = f.id AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL))
+            JOIN user_feeds uf ON uf.feed_id = f.id AND uf.user_id = %s
+            LEFT JOIN processed_articles pa ON pa.feed_id = f.id
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            {hidden_filter}
+            GROUP BY f.id, f.url, f.name, f.favicon_url, f.enabled,
+                     f.error_count, f.last_fetched_at, f.last_error,
+                     uf.folder_id, uf.position, uf.hidden
             ORDER BY uf.position ASC, f.name ASC;
             """,
-            (user_id, user_id),
+            (_user_id, _user_id),
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def get_feed_by_id(conn, feed_id: int) -> Optional[dict]:
+    """Возвращает ленту из таблицы feeds по ID, или None если не найдена."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, url, name, enabled FROM feeds WHERE id = %s;", (feed_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def delete_feed(conn, feed_id: int, user_id: Optional[int] = None) -> bool:
     """
     Удаляет подписку пользователя на ленту (запись из user_feeds).
     Саму ленту в feeds не трогает — другие пользователи могут быть подписаны.
+    В однопользовательском режиме user_id=None → используем 0.
     Возвращает True если подписка была найдена и удалена.
     """
     if conn is None:
         return False
+    _user_id = user_id if user_id is not None else 0
     with conn.cursor() as cur:
         cur.execute(
             """
             DELETE FROM user_feeds
-            WHERE feed_id = %s AND (user_id = %s OR (user_id IS NULL AND %s IS NULL));
+            WHERE feed_id = %s AND user_id = %s;
             """,
-            (feed_id, user_id, user_id),
+            (feed_id, _user_id),
         )
         return cur.rowcount > 0
 
 
 def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> Optional[dict]:
     """
-    Обновляет пользовательские настройки подписки: name, enabled, folder_id, position.
+    Обновляет пользовательские настройки подписки: name, enabled, folder_id, position, hidden.
     Возвращает обновлённую запись или None если подписка не найдена.
     """
     if conn is None:
         return None
-    allowed = {"folder_id", "position"}
+    _user_id = user_id if user_id is not None else 0
+    allowed = {"folder_id", "position", "hidden"}
     feed_allowed = {"name", "enabled"}
     user_updates = {k: v for k, v in kwargs.items() if k in allowed}
     feed_updates = {k: v for k, v in kwargs.items() if k in feed_allowed}
@@ -954,19 +1026,19 @@ def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> 
         if user_updates:
             set_clause = ", ".join(f"{k} = %s" for k in user_updates)
             cur.execute(
-                f"UPDATE user_feeds SET {set_clause} WHERE feed_id = %s AND (user_id = %s OR (user_id IS NULL AND %s IS NULL));",
-                list(user_updates.values()) + [feed_id, user_id, user_id],
+                f"UPDATE user_feeds SET {set_clause} WHERE feed_id = %s AND user_id = %s;",
+                list(user_updates.values()) + [feed_id, _user_id],
             )
         cur.execute(
             """
             SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
                    f.error_count, f.last_fetched_at, f.last_error,
-                   uf.folder_id, uf.position
+                   uf.folder_id, uf.position, uf.hidden
             FROM feeds f
             JOIN user_feeds uf ON uf.feed_id = f.id
-            WHERE f.id = %s AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL));
+            WHERE f.id = %s AND uf.user_id = %s;
             """,
-            (feed_id, user_id, user_id),
+            (feed_id, _user_id),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -1149,19 +1221,23 @@ def import_catalog_feeds(conn) -> int:
     from urllib.parse import urlparse
     count = 0
     with conn.cursor() as cur:
-        for name, url in RSS_FEEDS.items():
+        for name, feed in RSS_FEEDS.items():
+            url = feed["url"] if isinstance(feed, dict) else feed
+            category = feed.get("category") if isinstance(feed, dict) else None
             if not url:
                 continue
             domain = urlparse(url).netloc
             favicon_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
             cur.execute(
                 """
-                INSERT INTO feeds (url, name, favicon_url, is_catalog, enabled)
-                VALUES (%s, %s, %s, TRUE, TRUE)
-                ON CONFLICT (url) DO UPDATE SET is_catalog = TRUE
+                INSERT INTO feeds (url, name, favicon_url, category, is_catalog, enabled)
+                VALUES (%s, %s, %s, %s, TRUE, TRUE)
+                ON CONFLICT (url) DO UPDATE SET
+                    is_catalog = TRUE,
+                    category   = COALESCE(EXCLUDED.category, feeds.category)
                 RETURNING (xmax = 0) AS inserted;
                 """,
-                (url, name, favicon_url),
+                (url, name, favicon_url, category),
             )
             row = cur.fetchone()
             if row and row["inserted"]:
@@ -1242,14 +1318,16 @@ def list_catalog_feeds(conn, user_id=None):
 
     Флаг is_subscribed=True если пользователь уже подписан на ленту через user_feeds.
     Статистика берётся из кэша feed_catalog_stats — быстро.
+    В однопользовательском режиме user_id=None → используем 0.
     """
     if conn is None:
         return []
+    _user_id = user_id if user_id is not None else 0
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
-                f.id, f.url, f.name, f.favicon_url, f.enabled,
+                f.id, f.url, f.name, f.favicon_url, f.category, f.enabled,
                 f.error_count, f.last_fetched_at,
                 COALESCE(s.subscribers, 0)    AS subscribers,
                 COALESCE(s.posts_per_week, 0) AS posts_per_week,
@@ -1259,10 +1337,295 @@ def list_catalog_feeds(conn, user_id=None):
             LEFT JOIN feed_catalog_stats s ON s.feed_id = f.id
             LEFT JOIN user_feeds uf
                 ON uf.feed_id = f.id
-               AND (uf.user_id = %s OR (uf.user_id IS NULL AND %s IS NULL))
+               AND uf.user_id = %s
             WHERE f.is_catalog = TRUE
             ORDER BY f.name;
             """,
-            (user_id, user_id),
+            (_user_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+# ─────────────────────────────────────────────────────────────
+#  Папки (Сценарий 1.3)
+# ─────────────────────────────────────────────────────────────
+
+def create_folder(conn, name: str, user_id: Optional[int] = None) -> dict:
+    """
+    Создаёт папку в боковой панели.
+    Возвращает созданную папку с id.
+    """
+    _user_id = user_id if user_id is not None else 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO feed_folders (user_id, name)
+            VALUES (%s, %s)
+            RETURNING id, user_id, name, position;
+            """,
+            (_user_id, name),
+        )
+        return dict(cur.fetchone())
+
+
+def list_folders(conn, user_id: Optional[int] = None) -> List[dict]:
+    """
+    Возвращает все папки пользователя, отсортированные по position.
+    """
+    _user_id = user_id if user_id is not None else 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, user_id, name, position
+            FROM feed_folders
+            WHERE user_id = %s
+            ORDER BY position ASC, name ASC;
+            """,
+            (_user_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def update_folder(conn, folder_id: int, user_id: Optional[int] = None, **kwargs) -> Optional[dict]:
+    """
+    Обновляет name или position папки.
+    Возвращает обновлённую папку или None если не найдена.
+    """
+    _user_id = user_id if user_id is not None else 0
+    allowed = {"name", "position"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return None
+    with conn.cursor() as cur:
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        cur.execute(
+            f"""
+            UPDATE feed_folders SET {set_clause}
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, name, position;
+            """,
+            list(updates.values()) + [folder_id, _user_id],
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def delete_folder(conn, folder_id: int, user_id: Optional[int] = None) -> bool:
+    """
+    Удаляет папку. Ленты внутри перемещаются в корень (folder_id = NULL).
+    Возвращает True если папка найдена и удалена.
+    """
+    _user_id = user_id if user_id is not None else 0
+    with conn.cursor() as cur:
+        # Перемещаем ленты в корень
+        cur.execute(
+            "UPDATE user_feeds SET folder_id = NULL WHERE folder_id = %s AND user_id = %s;",
+            (folder_id, _user_id),
+        )
+        cur.execute(
+            "DELETE FROM feed_folders WHERE id = %s AND user_id = %s;",
+            (folder_id, _user_id),
+        )
+        return cur.rowcount > 0
+
+
+# ─────────────────────────────────────────────────────────────
+#  Статьи ленты (Сценарий 1.4)
+# ─────────────────────────────────────────────────────────────
+
+def list_feed_articles(
+    conn,
+    feed_id: int,
+    page: int = 1,
+    page_size: int = 30,
+    user_id: int = 0,
+    unread_only: bool = False,
+) -> List[dict]:
+    """
+    Возвращает статьи ленты с пагинацией, отсортированные по дате (новые первые).
+    Поле is_read определяется через LEFT JOIN с article_reads.
+    unread_only=True — возвращает только непрочитанные статьи.
+    """
+    if conn is None:
+        return []
+    offset = (page - 1) * page_size
+    unread_filter = "AND ar.link IS NULL" if unread_only else ""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.published_at,
+                pa.source,
+                (ar.link IS NOT NULL) AS is_read
+            FROM processed_articles pa
+            LEFT JOIN article_reads ar
+                ON ar.link = pa.link AND ar.user_id = %s
+            WHERE pa.feed_id = %s
+            {unread_filter}
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT %s OFFSET %s;
+            """,
+            (user_id, feed_id, page_size, offset),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_article_by_id(conn, article_id: int, user_id: int = 0) -> Optional[dict]:
+    """
+    Возвращает полные данные статьи по id, включая full_text и is_read.
+    Возвращает None если статья не найдена.
+    """
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.full_text,
+                pa.published_at,
+                pa.source,
+                (ar.link IS NOT NULL) AS is_read
+            FROM processed_articles pa
+            LEFT JOIN article_reads ar
+                ON ar.link = pa.link AND ar.user_id = %s
+            WHERE pa.id = %s;
+            """,
+            (user_id, article_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def update_article_full_text(conn, article_id: int, full_text: str) -> None:
+    """Сохраняет извлечённый full_text в processed_articles."""
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE processed_articles SET full_text = %s WHERE id = %s;",
+            (full_text, article_id),
+        )
+
+
+def mark_article_read(conn, link: str, user_id: int = 0) -> None:
+    """Помечает статью прочитанной (INSERT ON CONFLICT DO NOTHING)."""
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO article_reads (link, user_id)
+            VALUES (%s, %s)
+            ON CONFLICT (link, user_id) DO NOTHING;
+            """,
+            (link, user_id),
+        )
+
+
+def mark_feed_all_read(conn, feed_id: int, user_id: int = 0) -> int:
+    """
+    Помечает все статьи ленты прочитанными.
+    Возвращает количество новых записей (не считая уже прочитанных).
+    """
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO article_reads (link, user_id)
+            SELECT pa.link, %s
+            FROM processed_articles pa
+            WHERE pa.feed_id = %s
+            ON CONFLICT (link, user_id) DO NOTHING;
+            """,
+            (user_id, feed_id),
+        )
+        return cur.rowcount
+
+
+def get_read_links(conn, links: List[str], user_id: int = 0) -> Set[str]:
+    """Возвращает множество ссылок, которые пользователь уже прочитал."""
+    if conn is None or not links:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT link FROM article_reads WHERE link = ANY(%s) AND user_id = %s;",
+            (links, user_id),
+        )
+        return {row["link"] for row in cur.fetchall()}
+
+
+def list_unread_articles(
+    conn, user_id: int = 0, page: int = 1, page_size: int = 30
+) -> List[dict]:
+    """
+    Умная папка "Непрочитанное": все непрочитанные статьи из всех лент пользователя.
+    Отсортированы по дате (новые первые).
+    """
+    if conn is None:
+        return []
+    offset = (page - 1) * page_size
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.published_at,
+                pa.source,
+                FALSE AS is_read
+            FROM processed_articles pa
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            WHERE ar.link IS NULL
+              AND uf.hidden = FALSE
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT %s OFFSET %s;
+            """,
+            (user_id, user_id, page_size, offset),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def list_today_articles(
+    conn, user_id: int = 0, page: int = 1, page_size: int = 30
+) -> List[dict]:
+    """
+    Умная папка "Сегодня": статьи из лент пользователя опубликованные сегодня.
+    Отсортированы по дате (новые первые).
+    """
+    if conn is None:
+        return []
+    offset = (page - 1) * page_size
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.published_at,
+                pa.source,
+                (ar.link IS NOT NULL) AS is_read
+            FROM processed_articles pa
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            WHERE pa.published_at >= CURRENT_DATE
+              AND uf.hidden = FALSE
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT %s OFFSET %s;
+            """,
+            (user_id, user_id, page_size, offset),
         )
         return [dict(row) for row in cur.fetchall()]

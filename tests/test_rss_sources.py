@@ -33,7 +33,7 @@ from config.config import (
     DEFAULT_LIMIT_PER_FEED,
     DEFAULT_TEXT_MIN_LENGTH,
     POSTGRES_TABLE_PROCESSED_ARTICLES,
-    RSS_FEEDS,
+    get_feed_urls,
 )
 from src.pipeline.rss_parser import collect_articles_for_window, parse_rss, validate_and_deduplicate_feeds
 from src.tools.db_state import get_connection
@@ -218,12 +218,13 @@ def main():
     args = parser.parse_args()
 
     if args.feeds:
-        rss_feeds = {k: v for k, v in RSS_FEEDS.items() if k in args.feeds}
+        all_feeds = get_feed_urls()
+        rss_feeds = {k: v for k, v in all_feeds.items() if k in args.feeds}
         missing = set(args.feeds) - set(rss_feeds)
         if missing:
-            print(f"⚠️ Не найдены в config: {missing}. Доступные: {list(RSS_FEEDS.keys())[:10]}...")
+            print(f"⚠️ Не найдены в config: {missing}. Доступные: {list(all_feeds.keys())[:10]}...")
     else:
-        rss_feeds = dict(RSS_FEEDS)
+        rss_feeds = get_feed_urls()
     rss_feeds = validate_and_deduplicate_feeds(rss_feeds)
     if not rss_feeds:
         print("Нет лент для проверки.")

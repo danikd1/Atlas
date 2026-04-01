@@ -270,7 +270,9 @@ class FeedValidateResponse(BaseModel):
     """Результат валидации RSS-ленты."""
     valid: bool = Field(description="True если URL является рабочим RSS/Atom фидом.")
     name: Optional[str] = Field(default=None, description="Название ленты из тега <title>.")
+    description: Optional[str] = Field(default=None, description="Описание ленты из тега <description>.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа сайта.")
+    suggested_category: Optional[str] = Field(default=None, description="Категория предложенная GigaChat — пользователь может изменить.")
     error: Optional[str] = Field(default=None, description="Текст ошибки если valid=False.")
 
 
@@ -279,6 +281,7 @@ class FeedCreate(BaseModel):
     url: str = Field(..., description="URL RSS-ленты.")
     name: str = Field(..., description="Название ленты.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа — берётся из ответа /validate.")
+    category: Optional[str] = Field(default=None, description="Категория ленты — берётся из suggested_category или задаётся пользователем вручную.")
     folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели (опционально).")
 
 
@@ -293,6 +296,40 @@ class FeedItem(BaseModel):
     last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз успешно обновлялась.")
     last_error: Optional[str] = Field(default=None, description="Текст последней ошибки.")
     folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели.")
+    hidden: bool = Field(default=False, description="Скрыта ли лента из боковой панели.")
+    unread_count: int = Field(default=0, description="Количество непрочитанных статей.")
+
+    model_config = {"from_attributes": True}
+
+
+class ArticleItem(BaseModel):
+    """Статья в списке ленты."""
+    id: int = Field(description="ID статьи в processed_articles.")
+    link: str = Field(description="URL оригинальной статьи.")
+    title: Optional[str] = Field(default=None, description="Заголовок статьи.")
+    summary: Optional[str] = Field(default=None, description="Краткое описание.")
+    published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
+    source: Optional[str] = Field(default=None, description="Название источника.")
+    is_read: bool = Field(default=False, description="Прочитана ли статья текущим пользователем.")
+
+    model_config = {"from_attributes": True}
+
+
+class ArticleReadRequest(BaseModel):
+    """Запрос на пометку статьи прочитанной."""
+    link: str = Field(..., description="URL статьи.")
+
+
+class ArticleDetail(BaseModel):
+    """Полные данные статьи для Reader mode."""
+    id: int = Field(description="ID статьи в processed_articles.")
+    link: str = Field(description="URL оригинальной статьи.")
+    title: Optional[str] = Field(default=None, description="Заголовок статьи.")
+    summary: Optional[str] = Field(default=None, description="Краткое описание.")
+    full_text: Optional[str] = Field(default=None, description="Полный текст. null если извлечь не удалось.")
+    published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
+    source: Optional[str] = Field(default=None, description="Название источника.")
+    is_read: bool = Field(default=False, description="Прочитана ли статья.")
 
     model_config = {"from_attributes": True}
 
@@ -302,6 +339,26 @@ class FeedUpdate(BaseModel):
     name: Optional[str] = Field(default=None, description="Новое название.")
     enabled: Optional[bool] = Field(default=None, description="Включить или выключить ленту.")
     folder_id: Optional[int] = Field(default=None, description="Переместить в папку (None = корень).")
+    hidden: Optional[bool] = Field(default=None, description="Скрыть ленту из боковой панели без отписки.")
+
+
+class FolderCreate(BaseModel):
+    """Данные для создания папки."""
+    name: str = Field(description="Название папки.")
+
+
+class FolderItem(BaseModel):
+    """Папка пользователя в боковой панели."""
+    id: int
+    name: str
+    position: int = 0
+    model_config = {"from_attributes": True}
+
+
+class FolderUpdate(BaseModel):
+    """Изменяемые поля папки."""
+    name: Optional[str] = Field(default=None, description="Новое название папки.")
+    position: Optional[int] = Field(default=None, description="Новая позиция в боковой панели.")
 
 
 class CatalogFeedItem(BaseModel):
@@ -310,6 +367,7 @@ class CatalogFeedItem(BaseModel):
     url: str = Field(description="URL RSS-ленты.")
     name: str = Field(description="Название ленты.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    category: Optional[str] = Field(default=None, description="Категория ленты (AI & ML, Engineering, и т.д.).")
     enabled: bool = Field(description="Активна ли лента.")
     error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
     last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз обновлялась.")

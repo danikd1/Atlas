@@ -20,6 +20,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .schemas import (
+    ArticleDetail,
+    ArticleItem,
+    ArticleReadRequest,
     CatalogFeedItem,
     CollectionArticle,
     CollectionItem,
@@ -28,6 +31,9 @@ from .schemas import (
     FeedUpdate,
     FeedValidateRequest,
     FeedValidateResponse,
+    FolderCreate,
+    FolderItem,
+    FolderUpdate,
     PipelineRunRequest,
     PipelineRunResponse,
     QARequest,
@@ -241,6 +247,9 @@ def rss_collect_endpoint(body: RssCollectRequest):
             limit_per_feed=body.limit_per_feed,
         )
         new_articles = stats.get("unique_articles", 0)
+        # Обновляем статистику каталога после сбора
+        from src.tools.db_state import get_connection, refresh_catalog_stats
+        refresh_catalog_stats(get_connection())
         return RssCollectResponse(
             success=True,
             new_articles=new_articles,
@@ -414,14 +423,24 @@ def validate_feed(body: FeedValidateRequest):
     import feedparser
     from urllib.parse import urlparse
     try:
-        feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
         import socket; socket.setdefaulttimeout(10)
+        feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
         if feed.bozo and not feed.entries:
             return FeedValidateResponse(valid=False, error="Не удалось распознать RSS-ленту")
         name = feed.feed.get("title") or urlparse(body.url).netloc
+        description = feed.feed.get("description") or feed.feed.get("subtitle") or ""
         domain = urlparse(body.url).netloc
         favicon_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
-        return FeedValidateResponse(valid=True, name=name, favicon_url=favicon_url)
+        # Определяем категорию через GigaChat (не блокируем ответ если недоступен)
+        from src.tools.llm_utils import suggest_feed_category
+        suggested_category = suggest_feed_category(name=name, description=description, url=body.url)
+        return FeedValidateResponse(
+            valid=True,
+            name=name,
+            description=description,
+            favicon_url=favicon_url,
+            suggested_category=suggested_category,
+        )
     except Exception as e:
         return FeedValidateResponse(valid=False, error=str(e))
 
@@ -438,7 +457,7 @@ def add_feed(body: FeedCreate):
     from src.tools.db_state import get_connection, ensure_tables, create_feed
     conn = get_connection()
     ensure_tables(conn)
-    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url)
+    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, category=body.category)
     if not feed:
         raise HTTPException(status_code=500, detail="Не удалось создать ленту")
     return FeedItem(**feed)
@@ -490,6 +509,92 @@ def patch_feed(feed_id: int, body: FeedUpdate):
 
 
 # ─────────────────────────────────────────────────────────────
+#  Статьи ленты (Сценарий 1.4)
+# ─────────────────────────────────────────────────────────────
+
+@app.get(
+    "/api/feeds/{feed_id}/articles",
+    tags=["Ленты"],
+    summary="Список статей ленты",
+    response_model=list[ArticleItem],
+    responses={404: {"description": "Лента не найдена"}},
+)
+def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False):
+    """
+    Возвращает статьи ленты с пагинацией (30 статей на страницу), новые первые.
+    unread_only=true — только непрочитанные статьи.
+    """
+    from src.tools.db_state import get_connection, list_feed_articles
+    conn = get_connection()
+    articles = list_feed_articles(conn, feed_id=feed_id, page=page, unread_only=unread_only)
+    return [ArticleItem(**a) for a in articles]
+
+
+# ─────────────────────────────────────────────────────────────
+#  Папки (Сценарий 1.3)
+# ─────────────────────────────────────────────────────────────
+
+@app.post(
+    "/api/folders",
+    tags=["Папки"],
+    summary="Создать папку",
+    response_model=FolderItem,
+    status_code=201,
+)
+def create_folder_endpoint(body: FolderCreate):
+    """Создаёт папку в боковой панели пользователя."""
+    from src.tools.db_state import get_connection, create_folder
+    conn = get_connection()
+    folder = create_folder(conn, name=body.name)
+    return FolderItem(**folder)
+
+
+@app.get(
+    "/api/folders",
+    tags=["Папки"],
+    summary="Список папок",
+    response_model=list[FolderItem],
+)
+def get_folders():
+    """Возвращает все папки пользователя, отсортированные по позиции."""
+    from src.tools.db_state import get_connection, list_folders
+    conn = get_connection()
+    return [FolderItem(**f) for f in list_folders(conn)]
+
+
+@app.patch(
+    "/api/folders/{folder_id}",
+    tags=["Папки"],
+    summary="Переименовать или переместить папку",
+    response_model=FolderItem,
+    responses={404: {"description": "Папка не найдена"}},
+)
+def patch_folder(folder_id: int, body: FolderUpdate):
+    """Обновляет название или позицию папки."""
+    from src.tools.db_state import get_connection, update_folder
+    conn = get_connection()
+    folder = update_folder(conn, folder_id, **body.model_dump(exclude_none=True))
+    if not folder:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    return FolderItem(**folder)
+
+
+@app.delete(
+    "/api/folders/{folder_id}",
+    tags=["Папки"],
+    summary="Удалить папку",
+    status_code=204,
+    responses={404: {"description": "Папка не найдена"}},
+)
+def delete_folder_endpoint(folder_id: int):
+    """Удаляет папку. Ленты внутри перемещаются в корень боковой панели."""
+    from src.tools.db_state import get_connection, delete_folder
+    conn = get_connection()
+    if not delete_folder(conn, folder_id):
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+
+
+# ─────────────────────────────────────────────────────────────
 #  Каталог лент (Сценарий 1.2)
 # ─────────────────────────────────────────────────────────────
 
@@ -511,6 +616,97 @@ def get_catalog():
     conn = get_connection()
     rows = list_catalog_feeds(conn)
     return [CatalogFeedItem(**r) for r in rows]
+
+
+@app.get(
+    "/api/articles/{article_id}",
+    tags=["Статьи"],
+    summary="Полные данные статьи (Reader mode)",
+    response_model=ArticleDetail,
+    responses={404: {"description": "Статья не найдена"}},
+)
+def get_article(article_id: int):
+    """
+    Возвращает полные данные статьи включая full_text.
+    Если full_text отсутствует в БД — извлекает с оригинального сайта и сохраняет.
+    Если извлечение не удалось — возвращает full_text: null (не ошибку).
+    """
+    from src.tools.db_state import get_connection, get_article_by_id, update_article_full_text
+    conn = get_connection()
+    article = get_article_by_id(conn, article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+
+    if article.get("full_text") is None:
+        try:
+            from src.tools.text_extraction import extract_full_text
+            text = extract_full_text(article["link"])
+            if text:
+                update_article_full_text(conn, article_id, text)
+                article["full_text"] = text
+        except Exception as e:
+            logger.warning("Не удалось извлечь full_text для article_id=%s: %s", article_id, e)
+
+    return ArticleDetail(**article)
+
+
+@app.get(
+    "/api/articles/unread",
+    tags=["Статьи"],
+    summary='Умная папка "Непрочитанное"',
+    response_model=list[ArticleItem],
+    response_description="Все непрочитанные статьи из подписок пользователя",
+)
+def get_unread_articles(page: int = 1):
+    """Возвращает непрочитанные статьи из всех активных лент пользователя, новые первые."""
+    from src.tools.db_state import get_connection, list_unread_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_unread_articles(conn, page=page)]
+
+
+@app.get(
+    "/api/articles/today",
+    tags=["Статьи"],
+    summary='Умная папка "Сегодня"',
+    response_model=list[ArticleItem],
+    response_description="Статьи опубликованные сегодня из подписок пользователя",
+)
+def get_today_articles(page: int = 1):
+    """Возвращает статьи из лент пользователя опубликованные сегодня, новые первые."""
+    from src.tools.db_state import get_connection, list_today_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_today_articles(conn, page=page)]
+
+
+@app.post(
+    "/api/articles/read",
+    tags=["Статьи"],
+    summary="Пометить статью прочитанной",
+    response_description="Подтверждение записи факта прочтения",
+)
+def mark_read(body: ArticleReadRequest):
+    """Записывает факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
+    from src.tools.db_state import get_connection, mark_article_read
+    conn = get_connection()
+    mark_article_read(conn, link=body.link)
+    return {"ok": True}
+
+
+@app.post(
+    "/api/feeds/{feed_id}/read-all",
+    tags=["Статьи"],
+    summary="Пометить все статьи ленты прочитанными",
+    response_description="Количество помеченных статей",
+    responses={404: {"description": "Лента не найдена"}},
+)
+def mark_feed_read_all(feed_id: int):
+    """Помечает все статьи ленты прочитанными. Повторный вызов безопасен."""
+    from src.tools.db_state import get_connection, get_feed_by_id, mark_feed_all_read
+    conn = get_connection()
+    if not get_feed_by_id(conn, feed_id):
+        raise HTTPException(status_code=404, detail="Лента не найдена")
+    marked = mark_feed_all_read(conn, feed_id=feed_id)
+    return {"marked": marked}
 
 
 if FRONTEND_DIR.exists():

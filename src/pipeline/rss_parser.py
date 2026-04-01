@@ -283,8 +283,8 @@ def collect_articles_for_window(
             rss_feeds = db_feeds
             logger.info("RSS: используем %d лент из БД (user_feeds)", len(rss_feeds))
         else:
-            from config.config import RSS_FEEDS
-            rss_feeds = RSS_FEEDS
+            from config.config import get_feed_urls
+            rss_feeds = get_feed_urls()
             logger.info("RSS: user_feeds пустая, используем %d лент из config", len(rss_feeds))
     
     # Валидация и обработка дубликатов
@@ -416,16 +416,17 @@ def main():
     """
     Главная функция пайплайна: собирает статьи и сохраняет результат.
     """
-    from config import RSS_FEEDS, DEFAULT_HOURS_BACK, DEFAULT_LIMIT_PER_FEED
-    
+    from config import get_feed_urls, DEFAULT_HOURS_BACK, DEFAULT_LIMIT_PER_FEED
+    _feed_urls = get_feed_urls()
+
     print("🚀 Запуск пайплайна сбора статей с Habr...")
-    print(f"📡 Обработка {len(RSS_FEEDS)} RSS-лент...")
+    print(f"📡 Обработка {len(_feed_urls)} RSS-лент...")
     
     # Этап 1: Сбор статей за последние 24 часа
     df_articles, stats = collect_articles_for_window(
         DEFAULT_HOURS_BACK,
         limit_per_feed=DEFAULT_LIMIT_PER_FEED,
-        rss_feeds=RSS_FEEDS
+        rss_feeds=_feed_urls
     )
     
     # Сохранение результата

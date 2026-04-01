@@ -244,6 +244,71 @@ def summarize_article(
         return "Ошибка при суммаризации статьи (GigaChat и BART недоступны)."
 
 
+FEED_CATEGORIES = [
+    "AI & ML",
+    "Engineering",
+    "Cloud & DevOps",
+    "Data",
+    "Security",
+    "Design",
+    "Tools",
+    "Management",
+    "Tech News",
+    "Case Studies",
+]
+
+
+def suggest_feed_category(name: str, description: str, url: str) -> Optional[str]:
+    """
+    Определяет категорию RSS-ленты через GigaChat.
+
+    Используется при добавлении ленты пользователем вручную — предлагает категорию
+    которую пользователь может принять или изменить.
+
+    Args:
+        name: Название ленты (из тега <title> RSS-фида).
+        description: Описание ленты (из тега <description> или <subtitle>).
+        url: URL ленты — используется как дополнительный контекст.
+
+    Returns:
+        Название категории из FEED_CATEGORIES или None если GigaChat недоступен.
+    """
+    try:
+        categories_list = "\n".join(f"- {c}" for c in FEED_CATEGORIES)
+        prompt = (
+            f"Определи категорию для RSS-ленты. Выбери одну категорию из списка ниже.\n\n"
+            f"Лента:\n"
+            f"- Название: {name}\n"
+            f"- Описание: {description or 'не указано'}\n"
+            f"- URL: {url}\n\n"
+            f"Доступные категории:\n{categories_list}\n\n"
+            f"Ответь одной строкой — только названием категории из списка, без пояснений."
+        )
+        client = create_gigachat_client()
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.0,
+                    max_tokens=20,
+                )
+            )
+        result = response.choices[0].message.content.strip()
+        # Проверяем что ответ входит в список категорий
+        if result in FEED_CATEGORIES:
+            return result
+        # Пробуем найти частичное совпадение
+        for cat in FEED_CATEGORIES:
+            if cat.lower() in result.lower() or result.lower() in cat.lower():
+                return cat
+        logger.warning("GigaChat вернул неизвестную категорию: '%s'", result)
+        return None
+    except Exception as e:
+        logger.warning("Не удалось определить категорию через GigaChat: %s", e)
+        return None
+
+
 def format_summary_text(summary: str, width: int = 100) -> str:
     """
     Форматирует суммаризацию: аккуратные переносы строк, абзацы.
