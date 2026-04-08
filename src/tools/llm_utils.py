@@ -309,6 +309,106 @@ def suggest_feed_category(name: str, description: str, url: str) -> Optional[str
         return None
 
 
+def generate_feed_description(name: str, url: str, titles: list) -> Optional[str]:
+    """
+    Генерирует описание RSS-ленты на русском языке на основе заголовков последних статей.
+
+    Args:
+        name: Название ленты.
+        url: URL ленты — используется как дополнительный контекст.
+        titles: Список заголовков последних статей (до 10).
+
+    Returns:
+        Описание ленты одним предложением на русском или None если GigaChat недоступен.
+    """
+    if not titles:
+        return None
+    try:
+        titles_text = "\n".join(f"- {t}" for t in titles[:10])
+        prompt = (
+            f"Напиши описание RSS-ленты одним коротким предложением на русском языке.\n"
+            f"Описание должно объяснять о чём эта лента — какие темы она освещает.\n"
+            f"Не упоминай название ленты в описании.\n\n"
+            f"Лента: {name}\n"
+            f"URL: {url}\n\n"
+            f"Последние заголовки статей:\n{titles_text}\n\n"
+            f"Ответь только одним предложением, без пояснений."
+        )
+        client = create_gigachat_client()
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.3,
+                    max_tokens=100,
+                )
+            )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning("Не удалось сгенерировать описание ленты через GigaChat: %s", e)
+        return None
+
+
+def generate_feed_descriptions_batch(feeds: list) -> dict:
+    """
+    Генерирует описания для нескольких лент за один LLM-вызов.
+
+    Args:
+        feeds: Список словарей {"id": int, "name": str, "url": str, "titles": List[str]}
+
+    Returns:
+        Словарь {feed_id: description} для лент где удалось сгенерировать описание.
+    """
+    if not feeds:
+        return {}
+    try:
+        feeds_text = ""
+        for i, feed in enumerate(feeds, 1):
+            titles_text = "\n".join(f"  - {t}" for t in feed["titles"][:10])
+            feeds_text += (
+                f"Лента {i}:\n"
+                f"  Название: {feed['name']}\n"
+                f"  URL: {feed['url']}\n"
+                f"  Заголовки статей:\n{titles_text}\n\n"
+            )
+        prompt = (
+            f"Для каждой ленты напиши описание одним коротким предложением на русском языке.\n"
+            f"Описание должно объяснять о чём лента — какие темы она освещает.\n"
+            f"Не упоминай название ленты в описании.\n\n"
+            f"{feeds_text}"
+            f"Ответь строго в формате JSON-массива:\n"
+            f'[{{"index": 1, "description": "..."}}, {{"index": 2, "description": "..."}}, ...]'
+        )
+        client = create_gigachat_client()
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.3,
+                    max_tokens=1000,
+                )
+            )
+        import json, re
+        raw = response.choices[0].message.content.strip()
+        # Вырезаем JSON из ответа если обёрнут в markdown
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if not match:
+            logger.warning("generate_feed_descriptions_batch: не удалось найти JSON в ответе")
+            return {}
+        items = json.loads(match.group())
+        result = {}
+        for item in items:
+            idx = item.get("index", 0) - 1
+            if 0 <= idx < len(feeds) and item.get("description"):
+                result[feeds[idx]["id"]] = item["description"].strip()
+        return result
+    except Exception as e:
+        logger.warning("generate_feed_descriptions_batch: ошибка GigaChat: %s", e)
+        return {}
+
+
 def format_summary_text(summary: str, width: int = 100) -> str:
     """
     Форматирует суммаризацию: аккуратные переносы строк, абзацы.

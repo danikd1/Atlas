@@ -281,6 +281,7 @@ class FeedCreate(BaseModel):
     url: str = Field(..., description="URL RSS-ленты.")
     name: str = Field(..., description="Название ленты.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа — берётся из ответа /validate.")
+    description: Optional[str] = Field(default=None, description="Описание ленты — берётся из ответа /validate.")
     category: Optional[str] = Field(default=None, description="Категория ленты — берётся из suggested_category или задаётся пользователем вручную.")
     folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели (опционально).")
 
@@ -291,6 +292,8 @@ class FeedItem(BaseModel):
     url: str = Field(description="URL RSS-ленты.")
     name: str = Field(description="Название ленты.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    description: Optional[str] = Field(default=None, description="Описание ленты.")
+    category: Optional[str] = Field(default=None, description="Категория ленты.")
     enabled: bool = Field(description="Активна ли лента (участвует ли в сборе).")
     error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
     last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз успешно обновлялась.")
@@ -298,6 +301,7 @@ class FeedItem(BaseModel):
     folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели.")
     hidden: bool = Field(default=False, description="Скрыта ли лента из боковой панели.")
     unread_count: int = Field(default=0, description="Количество непрочитанных статей.")
+    created_at: Optional[datetime] = Field(default=None, description="Дата подписки пользователя.")
 
     model_config = {"from_attributes": True}
 
@@ -367,6 +371,7 @@ class CatalogFeedItem(BaseModel):
     url: str = Field(description="URL RSS-ленты.")
     name: str = Field(description="Название ленты.")
     favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    description: Optional[str] = Field(default=None, description="Описание ленты.")
     category: Optional[str] = Field(default=None, description="Категория ленты (AI & ML, Engineering, и т.д.).")
     enabled: bool = Field(description="Активна ли лента.")
     error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
@@ -375,6 +380,7 @@ class CatalogFeedItem(BaseModel):
     posts_per_week: int = Field(default=0, description="Среднее кол-во постов в неделю за последние 30 дней.")
     last_post_at: Optional[datetime] = Field(default=None, description="Дата последней статьи из ленты.")
     is_subscribed: bool = Field(default=False, description="Подписан ли текущий пользователь на ленту.")
+    source_description: Optional[str] = Field(default=None, description="Описание источника (домена).")
 
     model_config = {"from_attributes": True}
 

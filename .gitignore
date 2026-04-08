@@ -9,19 +9,6 @@ venv/
 ENV/
 .venv
 
-# Python кэш
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Виртуальные окружения
-env/
-venv/
-ENV/
-.venv
-
 # Результаты работы
 outputs/
 models/
@@ -29,7 +16,7 @@ bertopic_output_2/
 *.xlsx
 *.parquet
 
-# Исключения для конфигурационных файлов (таксономия — основной источник ключевых слов)
+# Исключения для конфигурационных файлов
 !data/taxonomy.json
 
 # IDE
@@ -43,14 +30,8 @@ bertopic_output_2/
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Claude Code
+.claude/
 
-# OS
-.DS_Store
-Thumbs.db
-
+# Node
+node_modules/

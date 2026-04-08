@@ -428,12 +428,15 @@ def validate_feed(body: FeedValidateRequest):
         if feed.bozo and not feed.entries:
             return FeedValidateResponse(valid=False, error="Не удалось распознать RSS-ленту")
         name = feed.feed.get("title") or urlparse(body.url).netloc
-        description = feed.feed.get("description") or feed.feed.get("subtitle") or ""
         domain = urlparse(body.url).netloc
         favicon_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
-        # Определяем категорию через GigaChat (не блокируем ответ если недоступен)
-        from src.tools.llm_utils import suggest_feed_category
-        suggested_category = suggest_feed_category(name=name, description=description, url=body.url)
+        # Заголовки последних статей для генерации описания
+        titles = [e.get("title", "") for e in feed.entries[:10] if e.get("title")]
+        # Генерируем описание и категорию через GigaChat (не блокируем ответ если недоступен)
+        from src.tools.llm_utils import generate_feed_description, suggest_feed_category
+        description = generate_feed_description(name=name, url=body.url, titles=titles)
+        channel_description = feed.feed.get("description") or feed.feed.get("subtitle") or ""
+        suggested_category = suggest_feed_category(name=name, description=channel_description, url=body.url)
         return FeedValidateResponse(
             valid=True,
             name=name,
@@ -454,13 +457,15 @@ def validate_feed(body: FeedValidateRequest):
 )
 def add_feed(body: FeedCreate):
     """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует."""
-    from src.tools.db_state import get_connection, ensure_tables, create_feed
+    from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds
     conn = get_connection()
     ensure_tables(conn)
-    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, category=body.category)
+    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, description=body.description, category=body.category, folder_id=body.folder_id)
     if not feed:
         raise HTTPException(status_code=500, detail="Не удалось создать ленту")
-    return FeedItem(**feed)
+    feeds = list_feeds(conn)
+    full_feed = next((f for f in feeds if f["id"] == feed["id"]), feed)
+    return FeedItem(**full_feed)
 
 
 @app.get(
@@ -469,11 +474,11 @@ def add_feed(body: FeedCreate):
     summary="Список подписок пользователя",
     response_model=list[FeedItem],
 )
-def get_feeds():
+def get_feeds(include_hidden: bool = False):
     """Возвращает все ленты на которые подписан пользователь. Используется для отрисовки боковой панели."""
     from src.tools.db_state import get_connection, list_feeds
     conn = get_connection()
-    return [FeedItem(**f) for f in list_feeds(conn)]
+    return [FeedItem(**f) for f in list_feeds(conn, include_hidden=include_hidden)]
 
 
 @app.delete(
@@ -613,9 +618,76 @@ def get_catalog():
     Статистика берётся из кэша feed_catalog_stats — обновляется раз в час.
     """
     from src.tools.db_state import get_connection, list_catalog_feeds
+    from urllib.parse import urlparse
+    from config.config import RSS_SOURCE_DESCRIPTIONS
     conn = get_connection()
     rows = list_catalog_feeds(conn)
-    return [CatalogFeedItem(**r) for r in rows]
+    result = []
+    for r in rows:
+        domain = urlparse(r["url"]).hostname or ""
+        result.append(CatalogFeedItem(**r, source_description=RSS_SOURCE_DESCRIPTIONS.get(domain)))
+    return result
+
+
+@app.post(
+    "/api/catalog/generate-descriptions",
+    tags=["Каталог"],
+    summary="Сгенерировать описания для лент каталога без описания",
+)
+def generate_catalog_descriptions():
+    """
+    Одноразовый эндпоинт: берёт все ленты каталога где description IS NULL,
+    скачивает RSS, берёт до 10 заголовков статей, батчами по 10 отправляет в GigaChat
+    и сохраняет сгенерированные описания на русском языке.
+    """
+    import feedparser
+    from src.tools.db_state import get_connection, update_feed_descriptions
+    from src.tools.llm_utils import generate_feed_descriptions_batch
+
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, url, name FROM feeds WHERE is_catalog = TRUE AND description IS NULL ORDER BY name;"
+        )
+        feeds_without_desc = [dict(r) for r in cur.fetchall()]
+
+    if not feeds_without_desc:
+        return {"message": "Все ленты уже имеют описание", "updated": 0}
+
+    # Скачиваем RSS и собираем заголовки для каждой ленты
+    feeds_with_titles = []
+    for feed in feeds_without_desc:
+        try:
+            parsed = feedparser.parse(feed["url"])
+            titles = [e.get("title", "") for e in parsed.entries[:10] if e.get("title")]
+            if titles:
+                feeds_with_titles.append({**feed, "titles": titles})
+        except Exception as e:
+            logger.warning("Не удалось скачать ленту %s: %s", feed["url"], e)
+
+    # Батчами по 10 лент отправляем в GigaChat
+    BATCH_SIZE = 10
+    all_descriptions = {}
+    for i in range(0, len(feeds_with_titles), BATCH_SIZE):
+        batch = feeds_with_titles[i:i + BATCH_SIZE]
+        result = generate_feed_descriptions_batch(batch)
+        all_descriptions.update(result)
+        logger.info("Батч %d/%d: получено %d описаний", i // BATCH_SIZE + 1,
+                    (len(feeds_with_titles) + BATCH_SIZE - 1) // BATCH_SIZE, len(result))
+
+    # Сохраняем в БД
+    if all_descriptions:
+        url_to_desc = {}
+        id_to_url = {f["id"]: f["url"] for f in feeds_with_titles}
+        for feed_id, description in all_descriptions.items():
+            url_to_desc[id_to_url[feed_id]] = description
+        update_feed_descriptions(conn, url_to_desc)
+
+    return {
+        "message": f"Обработано {len(feeds_with_titles)} лент, сгенерировано {len(all_descriptions)} описаний",
+        "updated": len(all_descriptions),
+        "skipped_no_articles": len(feeds_without_desc) - len(feeds_with_titles),
+    }
 
 
 @app.get(

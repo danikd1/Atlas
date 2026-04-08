@@ -172,7 +172,7 @@ def parse_rss(
                 error_msg = getattr(feed, 'bozo_exception', 'Unknown parsing error')
                 logger.warning(f"Ошибка парсинга RSS {feed_url}: {error_msg}")
                 # Продолжаем работу, если есть entries
-            
+
             # Обработка записей
             for entry in feed.entries:
                 try:
@@ -232,7 +232,7 @@ def parse_rss(
                     continue
             
             # Успешно распарсили
-            break
+            return entries
             
         except (URLError, socket.timeout, socket.gaierror, ConnectionError) as e:
             last_error = e
@@ -248,7 +248,7 @@ def parse_rss(
             # Неожиданные ошибки не ретраим
             logger.error(f"Неожиданная ошибка при парсинге {feed_url}: {e}")
             break
-    
+
     return entries
 
 
@@ -318,7 +318,7 @@ def collect_articles_for_window(
     skipped_duplicates = 0  # Сколько статей было отброшено как дубликаты в рамках текущего запуска
     skipped_already_processed = 0  # Сколько статей было пропущено как уже обработанные ранее
     feeds_failed = 0  # Счётчик лент, которые завершились с критической ошибкой
-    per_feed_max_published: Dict[str, datetime] = {} # По каждой ленте — макс. дата среди всех увиденных статей. 
+    per_feed_max_published: Dict[str, datetime] = {} # По каждой ленте — макс. дата среди всех увиденных статей.
     per_feed_new_count: Dict[str, int] = {} # По каждой ленте — сколько новых статей добавили в этом запуске (для вывода в лог)
     
     start_time = time.time()

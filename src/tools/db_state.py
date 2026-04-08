@@ -369,6 +369,20 @@ def ensure_tables(conn) -> None:
             """
         )
 
+        # Миграция: описание ленты (решение 1A).
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS description TEXT;
+            """
+        )
+
+        # Миграция: дата подписки пользователя (решение 1A).
+        cur.execute(
+            """
+            ALTER TABLE user_feeds ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+            """
+        )
+
         # Факты прочтения статей (Сценарий 1.5).
         cur.execute(
             """
@@ -902,10 +916,10 @@ def update_feed_states_from_seen(conn, per_feed_max: Dict[str, datetime]) -> Non
 # Feeds — управление RSS-лентами и подписками пользователей
 # ---------------------------------------------------------------------------
 
-def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, category: Optional[str] = None, user_id: Optional[int] = None) -> Optional[dict]:
+def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, category: Optional[str] = None, description: Optional[str] = None, folder_id: Optional[int] = None, user_id: Optional[int] = None) -> Optional[dict]:
     """
     Добавляет ленту в систему и подписывает пользователя.
-    Если лента с таким URL уже существует — берёт её id (не создаёт дубль).
+    Если лента с таким URL уже существует — берёт её id (не создаёт дубль, не меняет данные).
     В однопользовательском режиме user_id=None → используем 0 как анонимный пользователь.
     Возвращает dict с данными подписки или None при ошибке.
     """
@@ -915,23 +929,28 @@ def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, ca
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO feeds (url, name, favicon_url, category)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (url) DO UPDATE SET
-                name     = EXCLUDED.name,
-                category = COALESCE(EXCLUDED.category, feeds.category)
-            RETURNING id, url, name, favicon_url, category, enabled, error_count, last_fetched_at;
+            INSERT INTO feeds (url, name, favicon_url, category, description)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (url) DO NOTHING
+            RETURNING id, url, name, favicon_url, category, description, enabled, error_count, last_fetched_at;
             """,
-            (url, name, favicon_url, category),
+            (url, name, favicon_url, category, description),
         )
-        feed = dict(cur.fetchone())
+        feed_row = cur.fetchone()
+        if feed_row is None:
+            cur.execute(
+                "SELECT id, url, name, favicon_url, category, description, enabled, error_count, last_fetched_at FROM feeds WHERE url = %s;",
+                (url,),
+            )
+            feed_row = cur.fetchone()
+        feed = dict(feed_row)
         cur.execute(
             """
-            INSERT INTO user_feeds (feed_id, user_id)
-            VALUES (%s, %s)
+            INSERT INTO user_feeds (feed_id, user_id, folder_id)
+            VALUES (%s, %s, %s)
             ON CONFLICT (feed_id, user_id) DO NOTHING;
             """,
-            (feed["id"], _user_id),
+            (feed["id"], _user_id, folder_id),
         )
         return feed
 
@@ -950,9 +969,9 @@ def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
+            SELECT f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
                    f.error_count, f.last_fetched_at, f.last_error,
-                   uf.folder_id, uf.position, uf.hidden,
+                   uf.folder_id, uf.position, uf.hidden, uf.created_at,
                    COUNT(pa.link) FILTER (
                        WHERE pa.link IS NOT NULL
                          AND ar.link IS NULL
@@ -962,9 +981,9 @@ def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False
             LEFT JOIN processed_articles pa ON pa.feed_id = f.id
             LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
             {hidden_filter}
-            GROUP BY f.id, f.url, f.name, f.favicon_url, f.enabled,
+            GROUP BY f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
                      f.error_count, f.last_fetched_at, f.last_error,
-                     uf.folder_id, uf.position, uf.hidden
+                     uf.folder_id, uf.position, uf.hidden, uf.created_at
             ORDER BY uf.position ASC, f.name ASC;
             """,
             (_user_id, _user_id),
@@ -1031,14 +1050,22 @@ def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> 
             )
         cur.execute(
             """
-            SELECT f.id, f.url, f.name, f.favicon_url, f.enabled,
+            SELECT f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
                    f.error_count, f.last_fetched_at, f.last_error,
-                   uf.folder_id, uf.position, uf.hidden
+                   uf.folder_id, uf.position, uf.hidden, uf.created_at,
+                   COUNT(pa.link) FILTER (
+                       WHERE pa.link IS NOT NULL AND ar.link IS NULL
+                   ) AS unread_count
             FROM feeds f
             JOIN user_feeds uf ON uf.feed_id = f.id
-            WHERE f.id = %s AND uf.user_id = %s;
+            LEFT JOIN processed_articles pa ON pa.feed_id = f.id
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            WHERE f.id = %s AND uf.user_id = %s
+            GROUP BY f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
+                     f.error_count, f.last_fetched_at, f.last_error,
+                     uf.folder_id, uf.position, uf.hidden, uf.created_at;
             """,
-            (feed_id, _user_id),
+            (_user_id, feed_id, _user_id),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -1234,6 +1261,7 @@ def import_catalog_feeds(conn) -> int:
                 VALUES (%s, %s, %s, %s, TRUE, TRUE)
                 ON CONFLICT (url) DO UPDATE SET
                     is_catalog = TRUE,
+                    name       = EXCLUDED.name,
                     category   = COALESCE(EXCLUDED.category, feeds.category)
                 RETURNING (xmax = 0) AS inserted;
                 """,
@@ -1280,10 +1308,8 @@ def refresh_catalog_stats(conn) -> None:
             cur.execute(
                 f"""
                 SELECT
-                    ROUND(
-                        COUNT(*) FILTER (WHERE published_at > NOW() - INTERVAL '30 days')
-                        / 30.0 * 7
-                    ) AS posts_per_week,
+                    COUNT(*) FILTER (WHERE published_at > NOW() - INTERVAL '7 days')
+                        AS posts_per_week,
                     MAX(published_at) AS last_post_at
                 FROM {POSTGRES_TABLE_PROCESSED_ARTICLES}
                 WHERE feed_id = %s
@@ -1327,7 +1353,7 @@ def list_catalog_feeds(conn, user_id=None):
         cur.execute(
             """
             SELECT
-                f.id, f.url, f.name, f.favicon_url, f.category, f.enabled,
+                f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
                 f.error_count, f.last_fetched_at,
                 COALESCE(s.subscribers, 0)    AS subscribers,
                 COALESCE(s.posts_per_week, 0) AS posts_per_week,
@@ -1344,6 +1370,24 @@ def list_catalog_feeds(conn, user_id=None):
             (_user_id,),
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+def update_feed_descriptions(conn, feed_descriptions: dict) -> None:
+    """
+    Сохраняет описания лент в feeds.description.
+    Записывает только если description ещё не заполнен (IS NULL).
+    feed_descriptions: {url: description}
+    """
+    if not feed_descriptions or conn is None:
+        return
+    with conn.cursor() as cur:
+        for url, description in feed_descriptions.items():
+            cur.execute(
+                "UPDATE feeds SET description = %s WHERE url = %s AND description IS NULL;",
+                (description, url),
+            )
+    conn.commit()
+    logger.info("update_feed_descriptions: обновлено %d описаний лент", len(feed_descriptions))
 
 
 # ─────────────────────────────────────────────────────────────

@@ -236,6 +236,17 @@ RSS_FEEDS = {
     # "Raiffeisenbank":   {"url": "", "category": "Engineering"},
 }
 
+# Описания источников для каталога (ключ — домен)
+RSS_SOURCE_DESCRIPTIONS = {
+    "www.atlassian.com":        "Всё о продуктивности команд и инструментах для совместной работы.",
+    "cloudblog.withgoogle.com": "Как проектировать, масштабировать и защищать облачные системы.",
+    "azure.microsoft.com":      "Облачные решения для разработчиков и бизнеса.",
+    "github.blog":              "Жизнь разработчика: инструменты, тренды, культура.",
+    "www.toptal.com":           "Опыт лучших специалистов в управлении и разработке продуктов.",
+    "blog.google":              "Что делает Google и куда движутся технологии.",
+}
+
+
 def get_feed_urls() -> dict:
     """Возвращает {name: url} — формат для rss_parser и других мест где категория не нужна."""
     return {name: feed["url"] if isinstance(feed, dict) else feed for name, feed in RSS_FEEDS.items()}
