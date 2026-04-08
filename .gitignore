@@ -9,19 +9,6 @@ venv/
 ENV/
 .venv
 
-# Python кэш
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Виртуальные окружения
-env/
-venv/
-ENV/
-.venv
-
 # Результаты работы (CSV в outputs игнорируются)
 outputs/*.csv
 *.xlsx
@@ -41,14 +28,5 @@ outputs/*.csv
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
+# Claude Code
+.claude/
