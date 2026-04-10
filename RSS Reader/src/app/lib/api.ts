@@ -10,6 +10,7 @@ export interface ApiFeed {
   name: string;
   favicon_url: string | null;
   description: string | null;
+  category: string | null;
   enabled: boolean;
   error_count: number;
   last_fetched_at: string | null;
@@ -41,6 +42,30 @@ export interface ApiFolder {
   id: number;
   name: string;
   position: number;
+  favicon_url: string | null;
+}
+
+export interface ApiArticleItem {
+  id: number;
+  link: string;
+  title: string | null;
+  summary: string | null;
+  published_at: string | null;
+  source: string | null;
+  is_read: boolean;
+  is_saved: boolean;
+}
+
+export interface ApiArticleDetail {
+  id: number;
+  link: string;
+  title: string | null;
+  summary: string | null;
+  full_text: string | null;
+  published_at: string | null;
+  source: string | null;
+  is_read: boolean;
+  is_saved: boolean;
 }
 
 export interface FeedValidateResponse {
@@ -77,6 +102,12 @@ export const api = {
   async getFeeds(includeHidden = false): Promise<ApiFeed[]> {
     const res = await fetch(`${API_BASE}/api/feeds?include_hidden=${includeHidden}`);
     if (!res.ok) throw new Error("Не удалось загрузить ленты");
+    return res.json();
+  },
+
+  async getFeed(id: number): Promise<ApiFeed> {
+    const res = await fetch(`${API_BASE}/api/feeds/${id}`);
+    if (!res.ok) throw new Error("Лента не найдена");
     return res.json();
   },
 
@@ -133,18 +164,147 @@ export const api = {
     return res.json();
   },
 
-  async createFolder(name: string): Promise<ApiFolder> {
+  async getFolders(): Promise<ApiFolder[]> {
+    const res = await fetch(`${API_BASE}/api/folders`);
+    if (!res.ok) throw new Error("Не удалось загрузить папки");
+    return res.json();
+  },
+
+  async createFolder(name: string, favicon_url?: string | null): Promise<ApiFolder> {
     const res = await fetch(`${API_BASE}/api/folders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, favicon_url: favicon_url ?? null }),
     });
     if (!res.ok) throw new Error("Не удалось создать папку");
+    return res.json();
+  },
+
+  async patchFolder(id: number, data: { name?: string; position?: number }): Promise<ApiFolder> {
+    const res = await fetch(`${API_BASE}/api/folders/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error("Не удалось обновить папку");
     return res.json();
   },
 
   async deleteFolder(id: number): Promise<void> {
     const res = await fetch(`${API_BASE}/api/folders/${id}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) throw new Error("Не удалось удалить папку");
+  },
+
+  async getTodayArticles(): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/articles/today`);
+    if (!res.ok) throw new Error("Не удалось загрузить статьи за сегодня");
+    return res.json();
+  },
+
+  async getUnreadArticles(page = 1): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/articles/unread?page=${page}`);
+    if (!res.ok) throw new Error("Не удалось загрузить непрочитанные статьи");
+    return res.json();
+  },
+
+  async getAllArticles(page = 1): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/articles?page=${page}`);
+    if (!res.ok) throw new Error("Не удалось загрузить статьи");
+    return res.json();
+  },
+
+  async markArticleRead(link: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/articles/read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+    if (!res.ok) throw new Error("Не удалось пометить статью прочитанной");
+  },
+
+  async unmarkArticleRead(link: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/articles/read`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+    if (!res.ok) throw new Error("Не удалось снять метку прочитанного");
+  },
+
+  async getArticlesByFeedIds(feedIds: number[], page = 1): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/articles/by-feeds?feed_ids=${feedIds.join(",")}&page=${page}`);
+    if (!res.ok) throw new Error("Не удалось загрузить статьи");
+    return res.json();
+  },
+
+  async getFeedArticles(feedId: number, page = 1, unreadOnly = false): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/feeds/${feedId}/articles?page=${page}&unread_only=${unreadOnly}`);
+    if (!res.ok) throw new Error("Не удалось загрузить статьи ленты");
+    return res.json();
+  },
+
+  async markFeedAllRead(feedId: number): Promise<{ marked: number }> {
+    const res = await fetch(`${API_BASE}/api/feeds/${feedId}/read-all`, { method: "POST" });
+    if (!res.ok) throw new Error("Не удалось пометить все статьи прочитанными");
+    return res.json();
+  },
+
+  async getArticleById(id: number): Promise<ApiArticleDetail> {
+    const res = await fetch(`${API_BASE}/api/articles/${id}`);
+    if (!res.ok) throw new Error("Не удалось загрузить статью");
+    return res.json();
+  },
+
+  async getRssStatus(): Promise<{
+    last_run_at: string | null;
+    next_run_at: string | null;
+    is_running: boolean;
+    last_new_articles: number | null;
+    interval_hours: number;
+  }> {
+    const res = await fetch(`${API_BASE}/api/rss/status`);
+    if (!res.ok) throw new Error("Не удалось получить статус");
+    return res.json();
+  },
+
+  async triggerCollect(): Promise<{ new_articles: number }> {
+    const res = await fetch(`${API_BASE}/api/rss/collect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (res.status === 409) throw new Error("already_running");
+    if (!res.ok) throw new Error("Не удалось запустить сбор");
+    return res.json();
+  },
+
+  async bookmarkArticle(link: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/articles/bookmark`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+    if (!res.ok) throw new Error("Не удалось добавить закладку");
+  },
+
+  async unbookmarkArticle(link: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/articles/bookmark`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    });
+    if (!res.ok) throw new Error("Не удалось убрать закладку");
+  },
+
+  async getBookmarks(page = 1): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/bookmarks?page=${page}`);
+    if (!res.ok) throw new Error("Не удалось загрузить закладки");
+    return res.json();
+  },
+
+  async summarizeArticle(id: number): Promise<{ ai_summary: string | null; cached: boolean; error?: string }> {
+    const res = await fetch(`${API_BASE}/api/articles/${id}/summarize`, { method: "POST" });
+    if (!res.ok) throw new Error("Не удалось получить резюме");
+    return res.json();
   },
 };

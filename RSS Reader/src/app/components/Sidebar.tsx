@@ -16,23 +16,29 @@ import {
   EyeOff,
   Trash2,
   FileText,
-  Edit
+  Edit,
+  RefreshCw,
 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { ru } from "date-fns/locale";
 import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
-import {
-  getArticles,
-  getFolders,
-  addFolder,
-  removeFolder,
-  updateFolderName,
-} from "../lib/storage";
-import { api, apiFeedToRSSFeed } from "../lib/api";
-import { RSSFeed, Folder } from "../types";
+import { api, apiFeedToRSSFeed, ApiFolder } from "../lib/api";
+import { RSSFeed } from "../types";
 
-const ItemTypes = {
-  FEED: "feed",
-};
+const ItemTypes = { FEED: "feed" };
+
+// ─── Collapse state in localStorage ──────────────────────────
+
+function getFolderCollapsed(folderId: string): boolean {
+  return localStorage.getItem(`folder_${folderId}_collapsed`) === "true";
+}
+
+function setFolderCollapsed(folderId: string, collapsed: boolean) {
+  localStorage.setItem(`folder_${folderId}_collapsed`, String(collapsed));
+}
+
+// ─── DraggableFeed ────────────────────────────────────────────
 
 interface DraggableFeedProps {
   feed: RSSFeed;
@@ -47,9 +53,7 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
   const [{ isDragging }, drag] = useDrag(() => ({
     type: ItemTypes.FEED,
     item: { feedId: feed.id },
-    collect: (monitor) => ({
-      isDragging: monitor.isDragging(),
-    }),
+    collect: (monitor) => ({ isDragging: monitor.isDragging() }),
   }));
 
   const [showMenu, setShowMenu] = useState(false);
@@ -61,60 +65,47 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
         to={`/feed/${feed.id}`}
         className={`flex items-center justify-between px-3 py-2 pr-8 rounded-md text-sm transition-colors cursor-move ${
           isDragging ? "opacity-50" : ""
-        } ${
-          isActive
-            ? "bg-gray-100 text-gray-900"
-            : "text-gray-700 hover:bg-gray-50"
-        }`}
+        } ${isActive ? "bg-gray-100 text-gray-900" : "text-gray-700 hover:bg-gray-50"}`}
         style={{ opacity: isDragging ? 0.5 : 1 }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <Rss className={`${isInFolder ? "w-3.5 h-3.5" : "w-4 h-4"} flex-shrink-0 text-gray-400`} />
+          {feed.favicon_url ? (
+            <img
+              src={feed.favicon_url}
+              alt=""
+              className={`${isInFolder ? "w-3.5 h-3.5" : "w-4 h-4"} flex-shrink-0 rounded-sm`}
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <Rss className={`${isInFolder ? "w-3.5 h-3.5" : "w-4 h-4"} flex-shrink-0 text-gray-400`} />
+          )}
           <span className={`truncate ${isInFolder ? "text-xs" : ""}`}>{feed.title}</span>
         </div>
         {articleCount > 0 && (
-          <span className={`text-xs bg-gray-200 text-gray-700 rounded-full px-${isInFolder ? "1.5" : "2"} py-0.5 flex-shrink-0 group-hover:opacity-0 transition-opacity`}>
+          <span className="text-xs bg-gray-200 text-gray-700 rounded-full px-2 py-0.5 flex-shrink-0 group-hover:opacity-0 transition-opacity">
             {articleCount}
           </span>
         )}
       </Link>
       <button
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setShowMenu(!showMenu);
-        }}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMenu(!showMenu); }}
         className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all z-10"
-        title="Действия"
       >
         <MoreVertical className="w-3.5 h-3.5 text-gray-500" />
       </button>
       {showMenu && (
         <>
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setShowMenu(false)}
-          />
+          <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
           <div className="absolute right-2 top-10 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1 min-w-[140px]">
             <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onHide(feed.id);
-                setShowMenu(false);
-              }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onHide(feed.id); setShowMenu(false); }}
               className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
             >
               <EyeOff className="w-3.5 h-3.5" />
               Скрыть
             </button>
             <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onDelete(feed.id);
-                setShowMenu(false);
-              }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(feed.id); setShowMenu(false); }}
               className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -127,8 +118,10 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
   );
 }
 
+// ─── DroppableFolder ──────────────────────────────────────────
+
 interface DroppableFolderProps {
-  folder: Folder;
+  folder: ApiFolder;
   isExpanded: boolean;
   folderUnreadCount: number;
   folderFeeds: RSSFeed[];
@@ -143,96 +136,67 @@ interface DroppableFolderProps {
 }
 
 function DroppableFolder({
-  folder,
-  isExpanded,
-  folderUnreadCount,
-  folderFeeds,
-  onToggle,
-  onRemove,
-  onRename,
-  onDrop,
-  getArticleCountForFeed,
-  currentPath,
-  onHideFeed,
-  onDeleteFeed
+  folder, isExpanded, folderUnreadCount, folderFeeds,
+  onToggle, onRemove, onRename, onDrop,
+  getArticleCountForFeed, currentPath, onHideFeed, onDeleteFeed,
 }: DroppableFolderProps) {
   const [{ isOver }, drop] = useDrop(() => ({
     accept: ItemTypes.FEED,
-    drop: (item: { feedId: string }) => {
-      onDrop(item.feedId);
-    },
-    collect: (monitor) => ({
-      isOver: monitor.isOver(),
-    }),
+    drop: (item: { feedId: string }) => onDrop(item.feedId),
+    collect: (monitor) => ({ isOver: monitor.isOver() }),
   }));
 
   const [showMenu, setShowMenu] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(folder.name);
 
-  const handleRename = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editName.trim() && editName !== folder.name) {
-      onRename(editName.trim());
-    }
+  const confirmRename = () => {
+    console.log("[rename] confirmRename called, editName=", editName, "folder.name=", folder.name);
+    if (editName.trim() && editName !== folder.name) onRename(editName.trim());
     setIsEditing(false);
+  };
+
+  const handleCancelEdit = () => {
+    setIsEditing(false);
+    setEditName(folder.name);
   };
 
   return (
     <div ref={drop} className="mb-1">
-      <div
-        className={`flex items-center justify-between group transition-colors rounded-md relative ${
-          isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""
-        }`}
-      >
+      <div className={`flex items-center justify-between group transition-colors rounded-md relative ${isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""}`}>
         {isEditing ? (
-          <form onSubmit={handleRename} className="flex-1 flex items-center gap-1 px-3 py-2">
-            <FolderIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          <div className="flex-1 flex items-center gap-1 px-3 py-2">
+            {folder.favicon_url ? (
+              <img src={folder.favicon_url} alt="" className="w-4 h-4 flex-shrink-0 rounded-sm" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            ) : (
+              <FolderIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            )}
             <input
               type="text"
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") confirmRename(); if (e.key === "Escape") handleCancelEdit(); }}
               className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
-              onBlur={() => {
-                setIsEditing(false);
-                setEditName(folder.name);
-              }}
             />
-            <button
-              type="submit"
-              className="p-1 hover:bg-green-100 rounded transition-colors"
-              title="Сохранить"
-            >
+            <button type="button" onClick={confirmRename} className="p-1 hover:bg-green-100 rounded transition-colors">
               <Check className="w-3 h-3 text-green-600" />
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsEditing(false);
-                setEditName(folder.name);
-              }}
-              className="p-1 hover:bg-gray-100 rounded transition-colors"
-              title="Отмена"
-            >
+            <button type="button" onClick={handleCancelEdit} className="p-1 hover:bg-gray-100 rounded transition-colors">
               <X className="w-3 h-3 text-gray-500" />
             </button>
-          </form>
+          </div>
         ) : (
           <>
             <button
               onClick={onToggle}
               className="flex-1 flex items-center gap-2 px-3 py-2 pr-8 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              {isExpanded ? (
-                <ChevronDown className="w-3 h-3 flex-shrink-0" />
+              {isExpanded ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
+              {folder.favicon_url ? (
+                <img src={folder.favicon_url} alt="" className="w-4 h-4 flex-shrink-0 rounded-sm" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
               ) : (
-                <ChevronRight className="w-3 h-3 flex-shrink-0" />
-              )}
-              {isExpanded ? (
-                <FolderOpen className="w-4 h-4 flex-shrink-0 text-gray-400" />
-              ) : (
-                <FolderIcon className="w-4 h-4 flex-shrink-0 text-gray-400" />
+                isExpanded ? <FolderOpen className="w-4 h-4 flex-shrink-0 text-gray-400" /> : <FolderIcon className="w-4 h-4 flex-shrink-0 text-gray-400" />
               )}
               <span className="truncate">{folder.name}</span>
               {folderUnreadCount > 0 && (
@@ -242,42 +206,24 @@ function DroppableFolder({
               )}
             </button>
             <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setShowMenu(!showMenu);
-              }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMenu(!showMenu); }}
               className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all z-10"
-              title="Действия"
             >
               <MoreVertical className="w-3.5 h-3.5 text-gray-500" />
             </button>
             {showMenu && (
               <>
-                <div
-                  className="fixed inset-0 z-10"
-                  onClick={() => setShowMenu(false)}
-                />
+                <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
                 <div className="absolute right-2 top-10 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1 min-w-[140px]">
                   <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setIsEditing(true);
-                      setShowMenu(false);
-                    }}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsEditing(true); setShowMenu(false); }}
                     className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
                   >
                     <Edit className="w-3.5 h-3.5" />
                     Переименовать
                   </button>
                   <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onRemove();
-                      setShowMenu(false);
-                    }}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove(); setShowMenu(false); }}
                     className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -293,24 +239,19 @@ function DroppableFolder({
       {isExpanded && (
         <div className="ml-6 mt-1 space-y-1">
           {folderFeeds.length === 0 ? (
-            <p className="text-xs text-gray-400 px-3 py-1">
-              Перетащите источник сюда
-            </p>
+            <p className="text-xs text-gray-400 px-3 py-1">Перетащите источник сюда</p>
           ) : (
-            folderFeeds.map((feed) => {
-              const articleCount = getArticleCountForFeed(feed.id);
-              return (
-                <DraggableFeed
-                  key={feed.id}
-                  feed={feed}
-                  articleCount={articleCount}
-                  isActive={currentPath === `/feed/${feed.id}`}
-                  isInFolder={true}
-                  onHide={onHideFeed}
-                  onDelete={onDeleteFeed}
-                />
-              );
-            })
+            folderFeeds.map((feed) => (
+              <DraggableFeed
+                key={feed.id}
+                feed={feed}
+                articleCount={getArticleCountForFeed(feed.id)}
+                isActive={currentPath === `/feed/${feed.id}`}
+                isInFolder
+                onHide={onHideFeed}
+                onDelete={onDeleteFeed}
+              />
+            ))
           )}
         </div>
       )}
@@ -318,118 +259,164 @@ function DroppableFolder({
   );
 }
 
-interface DroppableRootAreaProps {
-  children: React.ReactNode;
-  onDrop: (feedId: string) => void;
-}
+// ─── DroppableRootArea ────────────────────────────────────────
 
-function DroppableRootArea({ children, onDrop }: DroppableRootAreaProps) {
+function DroppableRootArea({ children, onDrop }: { children: React.ReactNode; onDrop: (feedId: string) => void }) {
   const [{ isOver }, drop] = useDrop(() => ({
     accept: ItemTypes.FEED,
-    drop: (item: { feedId: string }) => {
-      onDrop(item.feedId);
-    },
-    collect: (monitor) => ({
-      isOver: monitor.isOver(),
-    }),
+    drop: (item: { feedId: string }) => onDrop(item.feedId),
+    collect: (monitor) => ({ isOver: monitor.isOver() }),
   }));
 
   return (
-    <div
-      ref={drop}
-      className={`transition-colors rounded-md ${
-        isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""
-      }`}
-    >
+    <div ref={drop} className={`transition-colors rounded-md ${isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""}`}>
       {children}
     </div>
   );
 }
 
+// ─── SidebarContent ───────────────────────────────────────────
+
 function SidebarContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const [feeds, setFeeds] = useState<RSSFeed[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [articles, setArticles] = useState<any[]>([]);
+  const [folders, setFolders] = useState<ApiFolder[]>([]);
+  const [todayCount, setTodayCount] = useState(0);
   const [feedsExpanded, setFeedsExpanded] = useState(true);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [rssStatus, setRssStatus] = useState<{
+    last_run_at: string | null;
+    next_run_at: string | null;
+    is_running: boolean;
+    last_new_articles: number | null;
+  } | null>(null);
+  const [isCollecting, setIsCollecting] = useState(false);
 
   useEffect(() => {
     loadData();
   }, [location.pathname]);
 
+  useEffect(() => {
+    const handler = () => loadData();
+    window.addEventListener("feeds-updated", handler);
+    return () => window.removeEventListener("feeds-updated", handler);
+  }, []);
+
+  useEffect(() => {
+    const loadStatus = async () => {
+      try {
+        const status = await api.getRssStatus();
+        setRssStatus(status);
+        setIsCollecting(status.is_running);
+      } catch {}
+    };
+    loadStatus();
+    const interval = setInterval(loadStatus, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleCollect = async () => {
+    if (isCollecting) return;
+    setIsCollecting(true);
+    try {
+      await api.triggerCollect();
+      const status = await api.getRssStatus();
+      setRssStatus(status);
+      await loadData();
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
+    } catch (e: any) {
+      if (e?.message !== "already_running") console.error("Ошибка сбора:", e);
+    } finally {
+      setIsCollecting(false);
+    }
+  };
+
   const loadData = async () => {
     try {
-      const apiFeeds = await api.getFeeds();
+      const [apiFeeds, apiFolders, todayArticles] = await Promise.all([
+        api.getFeeds(),
+        api.getFolders(),
+        api.getTodayArticles(),
+      ]);
       setFeeds(apiFeeds.map(apiFeedToRSSFeed));
+      setFolders(apiFolders);
+      setTodayCount(todayArticles.length);
+
+      // Restore collapse state from localStorage
+      setExpandedFolders((prev) => {
+        const next = new Set(prev);
+        apiFolders.forEach((f) => {
+          const id = f.id.toString();
+          if (!getFolderCollapsed(id)) next.add(id);
+        });
+        return next;
+      });
     } catch (e) {
-      console.error("Ошибка загрузки лент:", e);
+      console.error("Ошибка загрузки данных сайдбара:", e);
     }
-    setFolders(getFolders());
-    setArticles(getArticles());
   };
 
-  // Calculate counts
-  const todayCount = articles.filter((article) => {
-    const pubDate = new Date(article.pubDate);
-    const today = new Date();
-    return (
-      pubDate.getDate() === today.getDate() &&
-      pubDate.getMonth() === today.getMonth() &&
-      pubDate.getFullYear() === today.getFullYear()
-    );
-  }).length;
-
-  // unread_count берётся из API (поле на каждой ленте), saved — пока из localStorage (сценарий 2.1)
   const unreadCount = feeds.reduce((sum, f) => sum + (f.unread_count ?? 0), 0);
-  const savedCount = articles.filter((a) => a.saved).length;
 
-  const isActive = (path: string) => {
-    return location.pathname === path;
-  };
-
-  const getArticleCountForFeed = (feedId: string) => {
-    return feeds.find((f) => f.id === feedId)?.unread_count ?? 0;
-  };
-
-  const handleAddFolder = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newFolderName.trim()) {
-      addFolder(newFolderName);
-      setNewFolderName("");
-      setShowNewFolderInput(false);
-      loadData();
-    }
-  };
+  const getArticleCountForFeed = (feedId: string) =>
+    feeds.find((f) => f.id === feedId)?.unread_count ?? 0;
 
   const toggleFolder = (folderId: string) => {
-    const newSet = new Set(expandedFolders);
-    if (newSet.has(folderId)) {
-      newSet.delete(folderId);
-    } else {
-      newSet.add(folderId);
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+        setFolderCollapsed(folderId, true);
+      } else {
+        next.add(folderId);
+        setFolderCollapsed(folderId, false);
+      }
+      return next;
+    });
+  };
+
+  const handleAddFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newFolderName.trim()) return;
+    try {
+      await api.createFolder(newFolderName.trim());
+      setNewFolderName("");
+      setShowNewFolderInput(false);
+      await loadData();
+    } catch (e) {
+      console.error("Ошибка при создании папки:", e);
     }
-    setExpandedFolders(newSet);
   };
 
-  const handleRemoveFolder = (folderId: string) => {
-    if (confirm("Удалить папку? Источники в ней не будут удалены.")) {
-      removeFolder(folderId);
-      loadData();
+  const handleRemoveFolder = async (folderId: string) => {
+    if (!confirm("Удалить папку? Источники в ней не будут удалены.")) return;
+    try {
+      await api.deleteFolder(parseInt(folderId));
+      await loadData();
+    } catch (e) {
+      console.error("Ошибка при удалении папки:", e);
     }
   };
 
-  const handleRenameFolder = (folderId: string, newName: string) => {
-    updateFolderName(folderId, newName);
-    loadData();
+  const handleRenameFolder = async (folderId: string, newName: string) => {
+    try {
+      await api.patchFolder(parseInt(folderId), { name: newName });
+      await loadData();
+    } catch (e) {
+      console.error("Ошибка при переименовании папки:", e);
+    }
   };
 
-  const handleMoveFeedToFolder = (_feedId: string, _folderId: string | undefined) => {
-    // Папки будут привязаны к API в сценарии 1.3
-    loadData();
+  const handleMoveFeedToFolder = async (feedId: string, folderId: string | undefined) => {
+    try {
+      await api.patchFeed(parseInt(feedId), { folder_id: folderId ? parseInt(folderId) : null });
+      await loadData();
+    } catch (e) {
+      console.error("Ошибка при перемещении ленты:", e);
+    }
   };
 
   const handleToggleFeedHidden = async (feedId: string) => {
@@ -443,35 +430,29 @@ function SidebarContent() {
   };
 
   const handleRemoveFeed = async (feedId: string) => {
-    if (confirm("Удалить источник?")) {
-      try {
-        await api.deleteFeed(parseInt(feedId));
-        await loadData();
-      } catch (e) {
-        console.error("Ошибка при удалении ленты:", e);
-      }
+    if (!confirm("Удалить источник?")) return;
+    try {
+      await api.deleteFeed(parseInt(feedId));
+      await loadData();
+    } catch (e) {
+      console.error("Ошибка при удалении ленты:", e);
     }
   };
 
-  // Separate feeds by folder - filter hidden feeds
   const visibleFeeds = feeds.filter((f) => !f.hidden);
   const feedsWithoutFolder = visibleFeeds.filter((f) => !f.folderId);
 
   return (
-    <aside className="w-64 bg-white border-r border-gray-200 h-[calc(100vh-4rem)] overflow-y-auto flex-shrink-0">
+    <aside className="w-full bg-white border-r border-gray-200 h-full overflow-y-auto flex-shrink-0">
       <div className="p-4 space-y-6">
-        {/* Quick Links Section */}
+        {/* Quick Links */}
         <div>
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            Обзор
-          </h3>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Обзор</h3>
           <nav className="space-y-1">
             <Link
               to="/today"
               className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive("/today")
-                  ? "bg-blue-100 text-blue-700"
-                  : "text-gray-700 hover:bg-gray-100"
+                location.pathname === "/today" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
             >
               <div className="flex items-center gap-3">
@@ -479,18 +460,14 @@ function SidebarContent() {
                 <span>Сегодня</span>
               </div>
               {todayCount > 0 && (
-                <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">
-                  {todayCount}
-                </span>
+                <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">{todayCount}</span>
               )}
             </Link>
 
             <Link
               to="/unread"
               className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive("/unread")
-                  ? "bg-blue-100 text-blue-700"
-                  : "text-gray-700 hover:bg-gray-100"
+                location.pathname === "/unread" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
             >
               <div className="flex items-center gap-3">
@@ -498,37 +475,26 @@ function SidebarContent() {
                 <span>Непрочитанное</span>
               </div>
               {unreadCount > 0 && (
-                <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">
-                  {unreadCount}
-                </span>
+                <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">{unreadCount}</span>
               )}
             </Link>
 
             <Link
               to="/saved"
               className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive("/saved")
-                  ? "bg-blue-100 text-blue-700"
-                  : "text-gray-700 hover:bg-gray-100"
+                location.pathname === "/saved" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
             >
               <div className="flex items-center gap-3">
                 <Bookmark className="w-4 h-4" />
                 <span>Сохраненное</span>
               </div>
-              {savedCount > 0 && (
-                <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">
-                  {savedCount}
-                </span>
-              )}
             </Link>
 
             <Link
               to="/articles"
               className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive("/articles")
-                  ? "bg-blue-100 text-blue-700"
-                  : "text-gray-700 hover:bg-gray-100"
+                location.pathname === "/articles" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
               }`}
             >
               <div className="flex items-center gap-3">
@@ -546,11 +512,7 @@ function SidebarContent() {
               onClick={() => setFeedsExpanded(!feedsExpanded)}
               className="flex items-center gap-1 text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700"
             >
-              {feedsExpanded ? (
-                <ChevronDown className="w-3 h-3" />
-              ) : (
-                <ChevronRight className="w-3 h-3" />
-              )}
+              {feedsExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
               Источники
             </button>
             <button
@@ -564,7 +526,6 @@ function SidebarContent() {
 
           {feedsExpanded && (
             <nav className="space-y-1">
-              {/* New Folder Input */}
               {showNewFolderInput && (
                 <form onSubmit={handleAddFolder} className="flex items-center gap-1 mb-2">
                   <FolderIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
@@ -576,47 +537,31 @@ function SidebarContent() {
                     className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                     autoFocus
                   />
-                  <button
-                    type="submit"
-                    className="p-1 hover:bg-green-100 rounded transition-colors"
-                    title="Создать"
-                  >
+                  <button type="submit" className="p-1 hover:bg-green-100 rounded transition-colors">
                     <Check className="w-4 h-4 text-green-600" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowNewFolderInput(false);
-                      setNewFolderName("");
-                    }}
-                    className="p-1 hover:bg-gray-100 rounded transition-colors"
-                    title="Отмена"
-                  >
+                  <button type="button" onClick={() => { setShowNewFolderInput(false); setNewFolderName(""); }} className="p-1 hover:bg-gray-100 rounded transition-colors">
                     <X className="w-4 h-4 text-gray-500" />
                   </button>
                 </form>
               )}
 
-              {/* Folders */}
               {folders.map((folder) => {
-                const folderFeeds = feeds.filter((f) => f.folderId === folder.id);
-                const folderUnreadCount = folderFeeds.reduce(
-                  (sum, feed) => sum + getArticleCountForFeed(feed.id),
-                  0
-                );
-                const isExpanded = expandedFolders.has(folder.id);
+                const folderId = folder.id.toString();
+                const folderFeeds = visibleFeeds.filter((f) => f.folderId === folderId);
+                const folderUnreadCount = folderFeeds.reduce((sum, f) => sum + getArticleCountForFeed(f.id), 0);
 
                 return (
                   <DroppableFolder
                     key={folder.id}
                     folder={folder}
-                    isExpanded={isExpanded}
+                    isExpanded={expandedFolders.has(folderId)}
                     folderUnreadCount={folderUnreadCount}
                     folderFeeds={folderFeeds}
-                    onToggle={() => toggleFolder(folder.id)}
-                    onRemove={() => handleRemoveFolder(folder.id)}
-                    onRename={(newName) => handleRenameFolder(folder.id, newName)}
-                    onDrop={(feedId) => handleMoveFeedToFolder(feedId, folder.id)}
+                    onToggle={() => toggleFolder(folderId)}
+                    onRemove={() => handleRemoveFolder(folderId)}
+                    onRename={(name) => handleRenameFolder(folderId, name)}
+                    onDrop={(feedId) => handleMoveFeedToFolder(feedId, folderId)}
                     getArticleCountForFeed={getArticleCountForFeed}
                     currentPath={location.pathname}
                     onHideFeed={handleToggleFeedHidden}
@@ -625,40 +570,71 @@ function SidebarContent() {
                 );
               })}
 
-              {/* Feeds without folder - with drop zone */}
               {feedsWithoutFolder.length === 0 && folders.length === 0 ? (
                 <div className="text-center py-4">
-                  <p className="text-xs text-gray-500 mb-2">
-                    Нет источников
-                  </p>
-                  <button
-                    onClick={() => navigate("/")}
-                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-                  >
+                  <p className="text-xs text-gray-500 mb-2">Нет источников</p>
+                  <button onClick={() => navigate("/")} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
                     Добавить первый источник
                   </button>
                 </div>
               ) : (
                 <DroppableRootArea onDrop={(feedId) => handleMoveFeedToFolder(feedId, undefined)}>
                   <div className="space-y-1">
-                    {feedsWithoutFolder.map((feed) => {
-                      const articleCount = getArticleCountForFeed(feed.id);
-                      return (
-                        <DraggableFeed
-                          key={feed.id}
-                          feed={feed}
-                          articleCount={articleCount}
-                          isActive={location.pathname === `/feed/${feed.id}`}
-                          onHide={handleToggleFeedHidden}
-                          onDelete={handleRemoveFeed}
-                        />
-                      );
-                    })}
+                    {feedsWithoutFolder.map((feed) => (
+                      <DraggableFeed
+                        key={feed.id}
+                        feed={feed}
+                        articleCount={getArticleCountForFeed(feed.id)}
+                        isActive={location.pathname === `/feed/${feed.id}`}
+                        onHide={handleToggleFeedHidden}
+                        onDelete={handleRemoveFeed}
+                      />
+                    ))}
                   </div>
                 </DroppableRootArea>
               )}
             </nav>
           )}
+        </div>
+      </div>
+
+      {/* RSS Status */}
+      <div className="border-t border-gray-100 px-4 py-3 mt-auto">
+        <div className="flex items-center justify-between">
+          <div className="min-w-0 flex-1">
+            {rssStatus?.last_run_at ? (
+              <p className="text-xs text-gray-500 truncate">
+                Обновлено{" "}
+                {formatDistanceToNow(new Date(rssStatus.last_run_at), {
+                  addSuffix: true,
+                  locale: ru,
+                })}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-400">Ещё не обновлялось</p>
+            )}
+            {rssStatus?.next_run_at && !isCollecting && (
+              <p className="text-xs text-gray-400">
+                Следующее{" "}
+                {formatDistanceToNow(new Date(rssStatus.next_run_at), {
+                  addSuffix: true,
+                  locale: ru,
+                })}
+              </p>
+            )}
+            {isCollecting && (
+              <p className="text-xs text-blue-500">Обновление...</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleCollect}
+            disabled={isCollecting}
+            className="ml-2 p-1.5 rounded hover:bg-gray-100 transition-colors disabled:opacity-50"
+            title="Обновить сейчас"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${isCollecting ? "animate-spin" : ""}`} />
+          </button>
         </div>
       </div>
     </aside>

@@ -9,10 +9,13 @@ ReDoc:       http://localhost:8000/redoc
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +26,8 @@ from .schemas import (
     ArticleDetail,
     ArticleItem,
     ArticleReadRequest,
+    BookmarkRequest,
+    SummarizeResponse,
     CatalogFeedItem,
     CollectionArticle,
     CollectionItem,
@@ -48,6 +53,46 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
+# ─── Scheduler state ─────────────────────────────────────────────────────────
+
+_scheduler = BackgroundScheduler(timezone="UTC")
+_collect_lock = threading.Lock()
+
+_scheduler_state: dict = {
+    "last_run_at": None,       # datetime UTC
+    "next_run_at": None,       # datetime UTC
+    "is_running": False,
+    "last_new_articles": None, # int
+}
+
+COLLECT_INTERVAL_HOURS = 1
+
+
+def _run_scheduled_collect():
+    """Функция запускаемая по расписанию — собирает все ленты и обновляет состояние."""
+    if not _collect_lock.acquire(blocking=False):
+        logger.info("Scheduler: сбор уже выполняется, пропускаем.")
+        return
+    try:
+        _scheduler_state["is_running"] = True
+        logger.info("Scheduler: запускаем сбор RSS...")
+        from src.main import collect_rss
+        stats = collect_rss()
+        new_articles = stats.get("unique_articles", 0)
+        from src.tools.db_state import get_connection, refresh_catalog_stats
+        refresh_catalog_stats(get_connection())
+        _scheduler_state["last_run_at"] = datetime.utcnow()
+        _scheduler_state["last_new_articles"] = new_articles
+        # Обновляем next_run_at из scheduler
+        job = _scheduler.get_job("rss_collect")
+        _scheduler_state["next_run_at"] = job.next_run_time if job else None
+        logger.info("Scheduler: сбор завершён, новых статей: %d", new_articles)
+    except Exception as e:
+        logger.exception("Scheduler: ошибка сбора RSS: %s", e)
+    finally:
+        _scheduler_state["is_running"] = False
+        _collect_lock.release()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,7 +109,24 @@ async def lifespan(app: FastAPI):
     logger.info("Каталог лент: импортировано %d новых лент из config.RSS_FEEDS.", imported)
     refresh_catalog_stats(conn)
     logger.info("Статистика каталога обновлена.")
+
+    # Запускаем scheduler
+    _scheduler.add_job(
+        _run_scheduled_collect,
+        "interval",
+        hours=COLLECT_INTERVAL_HOURS,
+        id="rss_collect",
+        replace_existing=True,
+    )
+    _scheduler.start()
+    job = _scheduler.get_job("rss_collect")
+    _scheduler_state["next_run_at"] = job.next_run_time if job else None
+    logger.info("Scheduler запущен. Следующий сбор: %s", _scheduler_state["next_run_at"])
+
     yield
+
+    _scheduler.shutdown(wait=False)
+    logger.info("Scheduler остановлен.")
 
 
 _TAGS_METADATA = [
@@ -225,6 +287,24 @@ def list_collection_articles(collection_id: int):
     return [CollectionArticle(**r) for r in rows]
 
 
+@app.get(
+    "/api/rss/status",
+    tags=["RSS"],
+    summary="Статус автообновления лент",
+)
+def rss_status():
+    """Возвращает когда последний раз запускался сбор и когда следующий."""
+    last = _scheduler_state["last_run_at"]
+    nxt = _scheduler_state["next_run_at"]
+    return {
+        "last_run_at": last.isoformat() + "Z" if last else None,
+        "next_run_at": nxt.isoformat() if nxt else None,
+        "is_running": _scheduler_state["is_running"],
+        "last_new_articles": _scheduler_state["last_new_articles"],
+        "interval_hours": COLLECT_INTERVAL_HOURS,
+    }
+
+
 @app.post(
     "/api/rss/collect",
     tags=["RSS"],
@@ -238,18 +318,30 @@ def rss_collect_endpoint(body: RssCollectRequest):
 
     - Использует `last_processed_published_at` — не пересохраняет уже известные статьи.
     - Не выполняет фильтрацию, эмбеддинги или суммаризацию — только сбор сырых данных.
-    - Вызывайте этот эндпоинт по расписанию (например, раз в час), а `POST /api/pipeline/run` — по запросу пользователя.
+    - Ручной вызов сбрасывает таймер scheduler'а — следующий автозапуск через час от сейчас.
     """
+    if _scheduler_state["is_running"]:
+        raise HTTPException(status_code=409, detail="Сбор уже выполняется.")
     try:
         from src.main import collect_rss
+        _scheduler_state["is_running"] = True
         stats = collect_rss(
             hours_back=body.hours_back,
             limit_per_feed=body.limit_per_feed,
         )
         new_articles = stats.get("unique_articles", 0)
-        # Обновляем статистику каталога после сбора
         from src.tools.db_state import get_connection, refresh_catalog_stats
         refresh_catalog_stats(get_connection())
+
+        # Обновляем состояние и сбрасываем таймер scheduler'а
+        _scheduler_state["last_run_at"] = datetime.utcnow()
+        _scheduler_state["last_new_articles"] = new_articles
+        _scheduler.reschedule_job(
+            "rss_collect", trigger="interval", hours=COLLECT_INTERVAL_HOURS
+        )
+        job = _scheduler.get_job("rss_collect")
+        _scheduler_state["next_run_at"] = job.next_run_time if job else None
+
         return RssCollectResponse(
             success=True,
             new_articles=new_articles,
@@ -261,9 +353,13 @@ def rss_collect_endpoint(body: RssCollectRequest):
             time_elapsed_sec=round(stats.get("time_elapsed_sec", 0.0), 2),
             message=f"Сбор завершён. Новых статей: {new_articles}.",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("RSS collect error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _scheduler_state["is_running"] = False
 
 
 @app.post(
@@ -481,6 +577,23 @@ def get_feeds(include_hidden: bool = False):
     return [FeedItem(**f) for f in list_feeds(conn, include_hidden=include_hidden)]
 
 
+@app.get(
+    "/api/feeds/{feed_id}",
+    tags=["Ленты"],
+    summary="Получить подписку по ID",
+    response_model=FeedItem,
+    responses={404: {"description": "Подписка не найдена"}},
+)
+def get_feed(feed_id: int):
+    """Возвращает данные одной ленты пользователя: название, favicon, unread_count и т.д. 404 если пользователь не подписан на эту ленту."""
+    from src.tools.db_state import get_connection, get_user_feed_by_id
+    conn = get_connection()
+    feed = get_user_feed_by_id(conn, feed_id)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Подписка не найдена")
+    return FeedItem(**feed)
+
+
 @app.delete(
     "/api/feeds/{feed_id}",
     tags=["Ленты"],
@@ -507,7 +620,7 @@ def patch_feed(feed_id: int, body: FeedUpdate):
     """Обновляет название, статус (включена/выключена) или папку ленты."""
     from src.tools.db_state import get_connection, update_feed
     conn = get_connection()
-    updated = update_feed(conn, feed_id, **body.model_dump(exclude_none=True))
+    updated = update_feed(conn, feed_id, **body.model_dump(exclude_unset=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Подписка не найдена")
     return FeedItem(**updated)
@@ -528,6 +641,7 @@ def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False):
     """
     Возвращает статьи ленты с пагинацией (30 статей на страницу), новые первые.
     unread_only=true — только непрочитанные статьи.
+    Работает для любой ленты (каталожной или подписки) — 404 не возвращает.
     """
     from src.tools.db_state import get_connection, list_feed_articles
     conn = get_connection()
@@ -550,7 +664,7 @@ def create_folder_endpoint(body: FolderCreate):
     """Создаёт папку в боковой панели пользователя."""
     from src.tools.db_state import get_connection, create_folder
     conn = get_connection()
-    folder = create_folder(conn, name=body.name)
+    folder = create_folder(conn, name=body.name, favicon_url=body.favicon_url)
     return FolderItem(**folder)
 
 
@@ -578,7 +692,7 @@ def patch_folder(folder_id: int, body: FolderUpdate):
     """Обновляет название или позицию папки."""
     from src.tools.db_state import get_connection, update_folder
     conn = get_connection()
-    folder = update_folder(conn, folder_id, **body.model_dump(exclude_none=True))
+    folder = update_folder(conn, folder_id, **body.model_dump(exclude_unset=True))
     if not folder:
         raise HTTPException(status_code=404, detail="Папка не найдена")
     return FolderItem(**folder)
@@ -691,6 +805,71 @@ def generate_catalog_descriptions():
 
 
 @app.get(
+    "/api/articles",
+    tags=["Статьи"],
+    summary='Все посты из подписок пользователя',
+    response_model=list[ArticleItem],
+    response_description="Все статьи из всех активных лент пользователя",
+)
+def get_all_articles(page: int = 1):
+    """Возвращает все статьи из подписок пользователя, новые первые. Скрытые ленты исключены."""
+    from src.tools.db_state import get_connection, list_all_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_all_articles(conn, page=page)]
+
+
+@app.get(
+    "/api/articles/unread",
+    tags=["Статьи"],
+    summary='Умная папка "Непрочитанное"',
+    response_model=list[ArticleItem],
+    response_description="Все непрочитанные статьи из подписок пользователя",
+)
+def get_unread_articles(page: int = 1):
+    """Возвращает непрочитанные статьи из всех активных лент пользователя, новые первые."""
+    from src.tools.db_state import get_connection, list_unread_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_unread_articles(conn, page=page)]
+
+
+@app.get(
+    "/api/articles/today",
+    tags=["Статьи"],
+    summary='Умная папка "Сегодня"',
+    response_model=list[ArticleItem],
+    response_description="Статьи опубликованные сегодня из подписок пользователя",
+)
+def get_today_articles():
+    """Возвращает все статьи из лент пользователя опубликованные сегодня, новые первые."""
+    from src.tools.db_state import get_connection, list_today_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_today_articles(conn)]
+
+
+@app.get(
+    "/api/articles/by-feeds",
+    tags=["Статьи"],
+    summary="Статьи из нескольких лент",
+    response_model=list[ArticleItem],
+)
+def get_articles_by_feeds(feed_ids: str, page: int = 1):
+    """
+    Возвращает объединённый список статей из нескольких лент, отсортированный по дате.
+    feed_ids — через запятую: ?feed_ids=1,2,3
+    Используется для боковой панели мульти-лентных источников.
+    """
+    from src.tools.db_state import get_connection, list_articles_by_feed_ids
+    try:
+        ids = [int(x.strip()) for x in feed_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="feed_ids должны быть числами через запятую")
+    if not ids:
+        return []
+    conn = get_connection()
+    return [ArticleItem(**a) for a in list_articles_by_feed_ids(conn, ids, page=page)]
+
+
+@app.get(
     "/api/articles/{article_id}",
     tags=["Статьи"],
     summary="Полные данные статьи (Reader mode)",
@@ -722,32 +901,83 @@ def get_article(article_id: int):
     return ArticleDetail(**article)
 
 
-@app.get(
-    "/api/articles/unread",
+@app.post(
+    "/api/articles/{article_id}/summarize",
     tags=["Статьи"],
-    summary='Умная папка "Непрочитанное"',
-    response_model=list[ArticleItem],
-    response_description="Все непрочитанные статьи из подписок пользователя",
+    summary="AI-резюме статьи",
+    response_model=SummarizeResponse,
+    responses={404: {"description": "Статья не найдена"}},
 )
-def get_unread_articles(page: int = 1):
-    """Возвращает непрочитанные статьи из всех активных лент пользователя, новые первые."""
-    from src.tools.db_state import get_connection, list_unread_articles
-    conn = get_connection()
-    return [ArticleItem(**a) for a in list_unread_articles(conn, page=page)]
+def summarize_article_endpoint(article_id: int, force: bool = False):
+    """
+    Генерирует краткое AI-резюме статьи (3–4 предложения).
 
+    Логика:
+    1. Если ai_summary уже есть в БД и force=False — возвращает его мгновенно (cached=true).
+    2. Если full_text отсутствует — извлекает с оригинального сайта через trafilatura.
+    3. Вызывает summarize_article() из llm_utils (GigaChat → BART fallback).
+    4. Сохраняет результат в processed_articles.ai_summary для кэширования.
 
-@app.get(
-    "/api/articles/today",
-    tags=["Статьи"],
-    summary='Умная папка "Сегодня"',
-    response_model=list[ArticleItem],
-    response_description="Статьи опубликованные сегодня из подписок пользователя",
-)
-def get_today_articles(page: int = 1):
-    """Возвращает статьи из лент пользователя опубликованные сегодня, новые первые."""
-    from src.tools.db_state import get_connection, list_today_articles
+    force=true — пересчитать даже если кэш есть (например, при смене модели).
+    """
+    from src.tools.db_state import (
+        get_connection,
+        get_article_for_summarize,
+        save_ai_summary,
+        update_article_full_text,
+    )
     conn = get_connection()
-    return [ArticleItem(**a) for a in list_today_articles(conn, page=page)]
+    article = get_article_for_summarize(conn, article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+
+    # 1. Кэш — возвращаем сразу (если не force)
+    if article.get("ai_summary") and not force:
+        return SummarizeResponse(ai_summary=article["ai_summary"], cached=True)
+
+    # 2. Извлекаем full_text если нет
+    full_text = article.get("full_text")
+    if not full_text:
+        try:
+            from src.tools.text_extraction import extract_full_text
+            full_text = extract_full_text(article["link"])
+            if full_text:
+                update_article_full_text(conn, article_id, full_text)
+        except Exception as e:
+            logger.warning("Не удалось извлечь full_text для article_id=%s: %s", article_id, e)
+
+    if not full_text:
+        return SummarizeResponse(
+            ai_summary=None,
+            cached=False,
+            error="Не удалось извлечь текст статьи",
+        )
+
+    # 3. Суммаризация через GigaChat → BART fallback
+    try:
+        from src.tools.llm_utils import create_gigachat_client, summarize_article
+        try:
+            giga_client = create_gigachat_client()
+        except Exception as e:
+            logger.warning("Не удалось создать GigaChat клиент: %s — будет BART fallback", e)
+            giga_client = None
+        summary = summarize_article(
+            title=article.get("title") or "",
+            full_text=full_text,
+            client=giga_client,
+        )
+    except Exception as e:
+        logger.error("Ошибка суммаризации article_id=%s: %s", article_id, e)
+        return SummarizeResponse(
+            ai_summary=None,
+            cached=False,
+            error="Ошибка при генерации резюме",
+        )
+
+    # 4. Кэшируем результат
+    save_ai_summary(conn, article_id, summary)
+
+    return SummarizeResponse(ai_summary=summary, cached=False)
 
 
 @app.post(
@@ -762,6 +992,57 @@ def mark_read(body: ArticleReadRequest):
     conn = get_connection()
     mark_article_read(conn, link=body.link)
     return {"ok": True}
+
+
+@app.delete(
+    "/api/articles/read",
+    tags=["Статьи"],
+    summary="Снять метку прочитанного",
+    response_description="Подтверждение снятия метки",
+)
+def mark_unread(body: ArticleReadRequest):
+    """Удаляет факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
+    from src.tools.db_state import get_connection, mark_article_unread
+    conn = get_connection()
+    mark_article_unread(conn, link=body.link)
+    return {"ok": True}
+
+
+@app.post(
+    "/api/articles/bookmark",
+    tags=["Статьи"],
+    summary="Добавить статью в закладки",
+)
+def add_bookmark(body: BookmarkRequest):
+    """Добавляет статью в закладки. Повторный вызов безопасен (idempotent)."""
+    from src.tools.db_state import get_connection, add_bookmark as _add_bookmark
+    _add_bookmark(get_connection(), link=body.link)
+    return {"ok": True}
+
+
+@app.delete(
+    "/api/articles/bookmark",
+    tags=["Статьи"],
+    summary="Убрать статью из закладок",
+)
+def remove_bookmark(body: BookmarkRequest):
+    """Удаляет статью из закладок."""
+    from src.tools.db_state import get_connection, remove_bookmark as _remove_bookmark
+    _remove_bookmark(get_connection(), link=body.link)
+    return {"ok": True}
+
+
+@app.get(
+    "/api/bookmarks",
+    tags=["Статьи"],
+    summary="Закладки пользователя",
+    response_model=list[ArticleItem],
+)
+def get_bookmarks(page: int = 1):
+    """Возвращает закладки пользователя, отсортированные по дате сохранения (новые первые)."""
+    from src.tools.db_state import get_connection, list_bookmarks
+    rows = list_bookmarks(get_connection(), page=page)
+    return [ArticleItem(**r) for r in rows]
 
 
 @app.post(

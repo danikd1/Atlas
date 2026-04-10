@@ -1,137 +1,221 @@
 import { useState, useEffect } from "react";
-import { useParams, Link } from "react-router";
-import { Rss, Bookmark, Clock, ArrowLeft } from "lucide-react";
-import { getArticles, getFeeds, toggleArticleSaved, toggleArticleRead } from "../lib/storage";
-import { RSSArticle, RSSFeed } from "../types";
-import { formatDistanceToNow } from "date-fns";
-import { ru } from "date-fns/locale";
+import { useParams, Link, useLocation } from "react-router";
+import { Rss, CheckCheck, Loader2, ChevronDown } from "lucide-react";
+import { api, ApiFeed, ApiArticleItem } from "../lib/api";
+import { ArticleCard } from "./ArticleCard";
+
+const PAGE_SIZE = 30;
 
 export function FeedArticlesPage() {
   const { feedId } = useParams<{ feedId: string }>();
-  const [articles, setArticles] = useState<RSSArticle[]>([]);
-  const [feed, setFeed] = useState<RSSFeed | null>(null);
+  const location = useLocation();
+  const [feed, setFeed] = useState<ApiFeed | null>(null);
+  const [articles, setArticles] = useState<ApiArticleItem[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isMarkingAll, setIsMarkingAll] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    loadData();
+    if (!feedId) return;
+    loadFeed();
   }, [feedId]);
 
-  const loadData = () => {
+  useEffect(() => {
     if (!feedId) return;
+    resetAndLoad();
+  }, [feedId, unreadOnly, location.key]);
 
-    const feeds = getFeeds();
-    const currentFeed = feeds.find((f) => f.id === feedId);
-    setFeed(currentFeed || null);
-
-    const allArticles = getArticles();
-    const feedArticles = allArticles.filter((article) => article.feedId === feedId);
-
-    // Sort by date, newest first
-    feedArticles.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime());
-    setArticles(feedArticles);
+  const loadFeed = async () => {
+    try {
+      const f = await api.getFeed(parseInt(feedId!));
+      setFeed(f);
+    } catch {
+      setNotFound(true);
+    }
   };
 
-  const handleToggleSaved = (e: React.MouseEvent, articleId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleArticleSaved(articleId);
-    loadData();
+  const resetAndLoad = async () => {
+    setIsLoading(true);
+    setArticles([]);
+    setPage(1);
+    try {
+      const data = await api.getFeedArticles(parseInt(feedId!), 1, unreadOnly);
+      setArticles(data);
+      setHasMore(data.length === PAGE_SIZE);
+    } catch (e) {
+      console.error("Ошибка загрузки статей:", e);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleToggleRead = (e: React.MouseEvent, articleId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    toggleArticleRead(articleId);
-    loadData();
+  const loadMore = async () => {
+    if (isLoadingMore) return;
+    const nextPage = page + 1;
+    setIsLoadingMore(true);
+    try {
+      const data = await api.getFeedArticles(parseInt(feedId!), nextPage, unreadOnly);
+      setArticles((prev) => [...prev, ...data]);
+      setPage(nextPage);
+      setHasMore(data.length === PAGE_SIZE);
+    } catch (e) {
+      console.error("Ошибка загрузки следующей страницы:", e);
+    } finally {
+      setIsLoadingMore(false);
+    }
   };
 
-  if (!feed) {
+  const markAllRead = async () => {
+    if (isMarkingAll) return;
+    setIsMarkingAll(true);
+    try {
+      await api.markFeedAllRead(parseInt(feedId!));
+      setArticles((prev) => prev.map((a) => ({ ...a, is_read: true })));
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
+    } catch (e) {
+      console.error("Ошибка пометки прочитанными:", e);
+    } finally {
+      setIsMarkingAll(false);
+    }
+  };
+
+  const handleReadChange = (id: number, isRead: boolean) => {
+    setArticles((prev) => prev.map((a) => a.id === id ? { ...a, is_read: isRead } : a));
+  };
+
+  const handleSavedChange = (id: number, saved: boolean) => {
+    setArticles((prev) => prev.map((a) => a.id === id ? { ...a, is_saved: saved } : a));
+  };
+
+  const handleArticleClick = async (article: ApiArticleItem) => {
+    if (!article.is_read) {
+      setArticles((prev) =>
+        prev.map((a) => (a.id === article.id ? { ...a, is_read: true } : a))
+      );
+      try {
+        await api.markArticleRead(article.link);
+      } catch (e) {
+        console.error("Ошибка пометки прочитанной:", e);
+      }
+    }
+  };
+
+  if (notFound) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <p className="text-gray-500">Источник не найден</p>
+      <div className="max-w-4xl mx-auto py-12 text-center">
+        <Rss className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+        <p className="text-gray-500 text-lg">Лента не найдена</p>
+        <Link to="/" className="mt-4 inline-block text-sm text-blue-600 hover:underline">
+          На главную
+        </Link>
       </div>
     );
   }
 
+  const unreadCount = articles.filter((a) => !a.is_read).length;
+
   return (
     <div className="max-w-4xl mx-auto">
-      <Link
-        to="/feeds"
-        className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-6"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Назад к источникам
-      </Link>
-
+      {/* Заголовок ленты */}
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-            <Rss className="w-5 h-5 text-blue-600" />
-          </div>
-          <h1 className="text-3xl font-bold text-gray-900">{feed.title}</h1>
+          {feed?.favicon_url ? (
+            <img
+              src={feed.favicon_url}
+              alt=""
+              className="w-8 h-8 rounded-md flex-shrink-0"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <div className="w-8 h-8 bg-blue-100 rounded-md flex items-center justify-center flex-shrink-0">
+              <Rss className="w-4 h-4 text-blue-600" />
+            </div>
+          )}
+          <h1 className="text-2xl font-bold text-gray-900">
+            {feed?.name ?? "Загрузка..."}
+          </h1>
         </div>
-        {feed.description && (
-          <p className="text-gray-600 mb-2">{feed.description}</p>
+        {feed?.description && (
+          <p className="text-sm text-gray-500 mb-1">{feed.description}</p>
         )}
-        <p className="text-sm text-gray-500">
-          {articles.length} {articles.length === 1 ? "статья" : articles.length < 5 ? "статьи" : "статей"}
-        </p>
       </div>
 
-      <div className="space-y-3">
-        {articles.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-            <Rss className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">Статей от этого источника пока нет</p>
-          </div>
-        ) : (
-          articles.map((article) => (
-            <Link
+      {/* Панель управления */}
+      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={unreadOnly}
+              onChange={(e) => setUnreadOnly(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-700">Только непрочитанные</span>
+          </label>
+        </div>
+        <button
+          onClick={markAllRead}
+          disabled={isMarkingAll || unreadCount === 0}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {isMarkingAll ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCheck className="w-3.5 h-3.5" />
+          )}
+          Пометить все прочитанными
+        </button>
+      </div>
+
+      {/* Список статей */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16 text-gray-400">
+          <Loader2 className="w-6 h-6 animate-spin mr-2" />
+          Загрузка статей...
+        </div>
+      ) : articles.length === 0 ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+          <Rss className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+          <p className="text-gray-500">
+            {unreadOnly ? "Нет непрочитанных статей" : "Статей от этого источника пока нет"}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {articles.map((article) => (
+            <ArticleCard
               key={article.id}
-              to={`/article/${article.id}`}
-              className="block bg-white rounded-lg shadow-sm border border-gray-200 p-5 hover:shadow-md hover:border-blue-200 transition-all"
-            >
-              <div className="flex items-start justify-between gap-4 mb-2">
-                <h3 className="text-lg font-medium text-gray-900 flex-1">
-                  {article.title}
-                </h3>
-                <button
-                  onClick={(e) => handleToggleSaved(e, article.id)}
-                  className={`flex-shrink-0 p-1 rounded transition-colors ${
-                    article.saved ? "text-yellow-500" : "text-gray-400 hover:text-yellow-500"
-                  }`}
-                >
-                  <Bookmark className={`w-5 h-5 ${article.saved ? "fill-current" : ""}`} />
-                </button>
-              </div>
+              article={article}
+              variant="row"
+              onClick={handleArticleClick}
+              onReadChange={handleReadChange}
+              onSavedChange={handleSavedChange}
+            />
+          ))}
 
-              <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-                {article.description}
-              </p>
-
-              <div className="flex items-center justify-between text-xs">
-                <span className="flex items-center gap-1 text-gray-500">
-                  <Clock className="w-3 h-3" />
-                  {formatDistanceToNow(new Date(article.pubDate), { 
-                    addSuffix: true,
-                    locale: ru 
-                  })}
-                </span>
-
-                <button
-                  onClick={(e) => handleToggleRead(e, article.id)}
-                  className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                    article.read
-                      ? "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                      : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                  }`}
-                >
-                  {article.read ? "Прочитано" : "Непрочитано"}
-                </button>
-              </div>
-            </Link>
-          ))
-        )}
-      </div>
+          {/* Загрузить ещё */}
+          {hasMore && (
+            <div className="pt-2 flex justify-center">
+              <button
+                onClick={loadMore}
+                disabled={isLoadingMore}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              >
+                {isLoadingMore ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+                Загрузить ещё
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

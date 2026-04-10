@@ -21,3 +21,6 @@ uvicorn>=0.24.0
 # PostgreSQL
 psycopg2-binary>=2.9.0
 
+# Scheduler
+apscheduler>=3.10.0
+

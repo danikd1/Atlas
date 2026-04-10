@@ -46,8 +46,9 @@ function FeedIcon({ faviconUrl, category }: { faviconUrl: string | null; categor
 
 export function HomePage() {
   const navigate = useNavigate();
-  const context = useOutletContext<{ setSelectedFeed?: (feed: RSSFeed | null) => void }>();
+  const context = useOutletContext<{ setSelectedFeed?: (feed: RSSFeed | null) => void; selectedFeed?: RSSFeed | null }>();
   const setSelectedFeed = context?.setSelectedFeed;
+  const selectedFeed = context?.selectedFeed;
 
   const [catalog, setCatalog] = useState<ApiCatalogFeed[]>([]);
   const [hiddenFeeds, setHiddenFeeds] = useState<ApiFeed[]>([]);
@@ -87,19 +88,17 @@ export function HomePage() {
     }
   };
 
-  const handleSubscribe = async (feed: ApiCatalogFeed) => {
-    const domain = getDomain(feed.url);
-    const sameDomain = catalog.filter((f) => getDomain(f.url) === domain);
+  const handleSubscribe = async (feeds: ApiCatalogFeed[], sourceName: string) => {
     try {
-      if (sameDomain.length > 1) {
-        const folder = await api.createFolder(domain);
+      if (feeds.length > 1) {
+        const folder = await api.createFolder(sourceName, feeds[0].favicon_url);
         await Promise.all(
-          sameDomain.map((f) =>
-            api.addFeed({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, folder_id: folder.id })
+          feeds.map((f) =>
+            api.addFeed({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category, folder_id: folder.id })
           )
         );
       } else {
-        await api.addFeed({ url: feed.url, name: feed.name, favicon_url: feed.favicon_url, description: feed.description });
+        await api.addFeed({ url: feeds[0].url, name: feeds[0].name, favicon_url: feeds[0].favicon_url, description: feeds[0].description, category: feeds[0].category });
       }
       await loadCatalog();
     } catch (e) {
@@ -136,14 +135,16 @@ export function HomePage() {
     }
   };
 
-  const handleCardClick = (feed: ApiCatalogFeed) => {
+  const handleCardClick = (e: React.MouseEvent, representative: ApiCatalogFeed, allFeeds: ApiCatalogFeed[], sourceName: string) => {
+    e.stopPropagation();
     if (!setSelectedFeed) return;
     setSelectedFeed({
-      id: feed.id.toString(),
-      title: feed.name,
-      url: feed.url,
-      description: feed.description ?? undefined,
-      favicon_url: feed.favicon_url ?? undefined,
+      id: representative.id.toString(),
+      title: sourceName,
+      url: representative.url,
+      description: representative.source_description ?? representative.description ?? undefined,
+      favicon_url: representative.favicon_url ?? undefined,
+      feedIds: allFeeds.map((f) => f.id),
     });
   };
 
@@ -311,15 +312,18 @@ export function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredGroups.map(({ domain, feeds, representative, sourceName, latestPostAt, isSubscribed, categories }) => {
               const hasMultiple = feeds.length > 1;
+              const isActive = selectedFeed?.id === representative.id.toString();
               return (
                 <div
                   key={domain}
                   className={`bg-white rounded-lg shadow-sm border-2 p-5 hover:shadow-md transition-all relative cursor-pointer flex flex-col ${
-                    hasMultiple
+                    isActive
+                      ? "border-blue-500 ring-2 ring-blue-200"
+                      : hasMultiple
                       ? "border-blue-300 bg-gradient-to-br from-blue-50/30 to-white"
                       : "border-gray-200"
                   }`}
-                  onClick={() => handleCardClick(representative)}
+                  onClick={(e) => handleCardClick(e, representative, feeds, sourceName)}
                 >
                   {hasMultiple ? (
                     <div className="flex gap-3 mb-3">
@@ -396,7 +400,7 @@ export function HomePage() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        isSubscribed ? handleUnsubscribe(representative) : handleSubscribe(representative);
+                        isSubscribed ? handleUnsubscribe(representative) : handleSubscribe(feeds, sourceName);
                       }}
                       className={`text-sm px-4 py-1.5 rounded-md transition-colors ${
                         isSubscribed

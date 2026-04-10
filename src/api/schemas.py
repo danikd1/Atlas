@@ -315,6 +315,7 @@ class ArticleItem(BaseModel):
     published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
     source: Optional[str] = Field(default=None, description="Название источника.")
     is_read: bool = Field(default=False, description="Прочитана ли статья текущим пользователем.")
+    is_saved: bool = Field(default=False, description="Добавлена ли статья в закладки.")
 
     model_config = {"from_attributes": True}
 
@@ -322,6 +323,27 @@ class ArticleItem(BaseModel):
 class ArticleReadRequest(BaseModel):
     """Запрос на пометку статьи прочитанной."""
     link: str = Field(..., description="URL статьи.")
+
+
+class BookmarkRequest(BaseModel):
+    """Запрос на добавление/удаление закладки."""
+    link: str = Field(..., description="URL статьи.")
+
+
+class SummarizeResponse(BaseModel):
+    """Ответ эндпоинта суммаризации статьи."""
+    ai_summary: Optional[str] = Field(
+        default=None,
+        description="AI-резюме статьи (3–4 предложения). null если не удалось извлечь текст.",
+    )
+    cached: bool = Field(
+        default=False,
+        description="True если резюме было взято из кэша (БД), False если только что сгенерировано.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Описание ошибки. Присутствует если ai_summary=null.",
+    )
 
 
 class ArticleDetail(BaseModel):
@@ -334,6 +356,7 @@ class ArticleDetail(BaseModel):
     published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
     source: Optional[str] = Field(default=None, description="Название источника.")
     is_read: bool = Field(default=False, description="Прочитана ли статья.")
+    is_saved: bool = Field(default=False, description="Добавлена ли статья в закладки.")
 
     model_config = {"from_attributes": True}
 
@@ -349,6 +372,7 @@ class FeedUpdate(BaseModel):
 class FolderCreate(BaseModel):
     """Данные для создания папки."""
     name: str = Field(description="Название папки.")
+    favicon_url: Optional[str] = Field(default=None, description="Favicon для папок созданных из каталога.")
 
 
 class FolderItem(BaseModel):
@@ -356,6 +380,7 @@ class FolderItem(BaseModel):
     id: int
     name: str
     position: int = 0
+    favicon_url: Optional[str] = None
     model_config = {"from_attributes": True}
 
 

@@ -13,6 +13,7 @@ export interface RSSFeed {
   error_count?: number;      // из API: кол-во подряд идущих ошибок при сборе
   last_error?: string;       // из API: текст последней ошибки
   category?: string;         // из API: категория ленты
+  feedIds?: number[];        // для мульти-лентных источников: все id лент домена
 }
 
 export interface Source {
