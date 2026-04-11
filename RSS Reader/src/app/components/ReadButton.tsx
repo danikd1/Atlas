@@ -52,7 +52,8 @@ export function ReadButton({ link, isRead, onToggle }: ReadButtonProps) {
       </button>
 
       {/* Tooltip */}
-      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/read:block z-50">
+      <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 hidden group-hover/read:block z-50">
+        <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-gray-800" />
         <div className="bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
           {label}
         </div>

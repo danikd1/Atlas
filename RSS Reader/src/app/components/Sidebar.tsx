@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import {
   Calendar,
   BookOpen,
@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Folder as FolderIcon,
   FolderOpen,
+  Layers,
   X,
   Check,
   MoreVertical,
@@ -24,7 +25,7 @@ import { ru } from "date-fns/locale";
 import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import { api, apiFeedToRSSFeed, ApiFolder } from "../lib/api";
-import { RSSFeed } from "../types";
+import { RSSFeed, ArticleSource, sourceKey } from "../types";
 
 const ItemTypes = { FEED: "feed" };
 
@@ -45,11 +46,20 @@ interface DraggableFeedProps {
   articleCount: number;
   isActive: boolean;
   isInFolder?: boolean;
+  onSelect: () => void;
   onHide: (feedId: string) => void;
   onDelete: (feedId: string) => void;
 }
 
-function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHide, onDelete }: DraggableFeedProps) {
+function DraggableFeed({
+  feed,
+  articleCount,
+  isActive,
+  isInFolder = false,
+  onSelect,
+  onHide,
+  onDelete,
+}: DraggableFeedProps) {
   const [{ isDragging }, drag] = useDrag(() => ({
     type: ItemTypes.FEED,
     item: { feedId: feed.id },
@@ -60,12 +70,13 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
 
   return (
     <div className="relative group">
-      <Link
+      <button
         ref={drag}
-        to={`/feed/${feed.id}`}
-        className={`flex items-center justify-between px-3 py-2 pr-8 rounded-md text-sm transition-colors cursor-move ${
+        type="button"
+        onClick={onSelect}
+        className={`w-full flex items-center justify-between px-3 py-2 pr-8 rounded-md text-sm transition-colors cursor-move text-left ${
           isDragging ? "opacity-50" : ""
-        } ${isActive ? "bg-gray-100 text-gray-900" : "text-gray-700 hover:bg-gray-50"}`}
+        } ${isActive ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-50"}`}
         style={{ opacity: isDragging ? 0.5 : 1 }}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -74,7 +85,9 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
               src={feed.favicon_url}
               alt=""
               className={`${isInFolder ? "w-3.5 h-3.5" : "w-4 h-4"} flex-shrink-0 rounded-sm`}
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
             />
           ) : (
             <Rss className={`${isInFolder ? "w-3.5 h-3.5" : "w-4 h-4"} flex-shrink-0 text-gray-400`} />
@@ -82,13 +95,17 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
           <span className={`truncate ${isInFolder ? "text-xs" : ""}`}>{feed.title}</span>
         </div>
         {articleCount > 0 && (
-          <span className="text-xs bg-gray-200 text-gray-700 rounded-full px-2 py-0.5 flex-shrink-0 group-hover:opacity-0 transition-opacity">
+          <span className="text-xs bg-gray-100 text-gray-400 rounded-full px-2 py-0.5 flex-shrink-0 group-hover:opacity-0 transition-opacity">
             {articleCount}
           </span>
         )}
-      </Link>
+      </button>
       <button
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMenu(!showMenu); }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setShowMenu(!showMenu);
+        }}
         className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all z-10"
       >
         <MoreVertical className="w-3.5 h-3.5 text-gray-500" />
@@ -98,18 +115,28 @@ function DraggableFeed({ feed, articleCount, isActive, isInFolder = false, onHid
           <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
           <div className="absolute right-2 top-10 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1 min-w-[140px]">
             <button
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onHide(feed.id); setShowMenu(false); }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onHide(feed.id);
+                setShowMenu(false);
+              }}
               className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
             >
               <EyeOff className="w-3.5 h-3.5" />
               Скрыть
             </button>
             <button
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(feed.id); setShowMenu(false); }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onDelete(feed.id);
+                setShowMenu(false);
+              }}
               className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Удалить
+              Отписаться
             </button>
           </div>
         </>
@@ -130,15 +157,28 @@ interface DroppableFolderProps {
   onRename: (newName: string) => void;
   onDrop: (feedId: string) => void;
   getArticleCountForFeed: (feedId: string) => number;
-  currentPath: string;
+  activeKey: string | null;
+  onSelectFeed: (feed: RSSFeed) => void;
+  onSelectFolder: (folder: ApiFolder, feeds: RSSFeed[]) => void;
   onHideFeed: (feedId: string) => void;
   onDeleteFeed: (feedId: string) => void;
 }
 
 function DroppableFolder({
-  folder, isExpanded, folderUnreadCount, folderFeeds,
-  onToggle, onRemove, onRename, onDrop,
-  getArticleCountForFeed, currentPath, onHideFeed, onDeleteFeed,
+  folder,
+  isExpanded,
+  folderUnreadCount,
+  folderFeeds,
+  onToggle,
+  onRemove,
+  onRename,
+  onDrop,
+  getArticleCountForFeed,
+  activeKey,
+  onSelectFeed,
+  onSelectFolder,
+  onHideFeed,
+  onDeleteFeed,
 }: DroppableFolderProps) {
   const [{ isOver }, drop] = useDrop(() => ({
     accept: ItemTypes.FEED,
@@ -151,7 +191,6 @@ function DroppableFolder({
   const [editName, setEditName] = useState(folder.name);
 
   const confirmRename = () => {
-    console.log("[rename] confirmRename called, editName=", editName, "folder.name=", folder.name);
     if (editName.trim() && editName !== folder.name) onRename(editName.trim());
     setIsEditing(false);
   };
@@ -163,19 +202,33 @@ function DroppableFolder({
 
   return (
     <div ref={drop} className="mb-1">
-      <div className={`flex items-center justify-between group transition-colors rounded-md relative ${isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""}`}>
+      <div
+        className={`flex items-center justify-between group transition-colors rounded-md relative ${
+          isOver ? "bg-blue-50 ring-2 ring-blue-300" : ""
+        }`}
+      >
         {isEditing ? (
           <div className="flex-1 flex items-center gap-1 px-3 py-2">
             {folder.favicon_url ? (
-              <img src={folder.favicon_url} alt="" className="w-4 h-4 flex-shrink-0 rounded-sm" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              <img
+                src={folder.favicon_url}
+                alt=""
+                className="w-4 h-4 flex-shrink-0 rounded-sm"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = "none";
+                }}
+              />
             ) : (
-              <FolderIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              <FolderIcon className="w-4 h-4 text-blue-400 flex-shrink-0" />
             )}
             <input
               type="text"
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") confirmRename(); if (e.key === "Escape") handleCancelEdit(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmRename();
+                if (e.key === "Escape") handleCancelEdit();
+              }}
               className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
             />
@@ -192,21 +245,38 @@ function DroppableFolder({
               onClick={onToggle}
               className="flex-1 flex items-center gap-2 px-3 py-2 pr-8 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              {isExpanded ? <ChevronDown className="w-3 h-3 flex-shrink-0" /> : <ChevronRight className="w-3 h-3 flex-shrink-0" />}
-              {folder.favicon_url ? (
-                <img src={folder.favicon_url} alt="" className="w-4 h-4 flex-shrink-0 rounded-sm" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              {isExpanded ? (
+                <ChevronDown className="w-3 h-3 flex-shrink-0" />
               ) : (
-                isExpanded ? <FolderOpen className="w-4 h-4 flex-shrink-0 text-gray-400" /> : <FolderIcon className="w-4 h-4 flex-shrink-0 text-gray-400" />
+                <ChevronRight className="w-3 h-3 flex-shrink-0" />
+              )}
+              {folder.favicon_url ? (
+                <img
+                  src={folder.favicon_url}
+                  alt=""
+                  className="w-4 h-4 flex-shrink-0 rounded-sm"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              ) : isExpanded ? (
+                <FolderOpen className="w-4 h-4 flex-shrink-0 text-blue-400" />
+              ) : (
+                <FolderIcon className="w-4 h-4 flex-shrink-0 text-blue-400" />
               )}
               <span className="truncate">{folder.name}</span>
               {folderUnreadCount > 0 && (
-                <span className="text-xs bg-gray-200 text-gray-700 rounded-full px-2 py-0.5 group-hover:opacity-0 transition-opacity">
+                <span className="text-xs bg-gray-100 text-gray-400 rounded-full px-2 py-0.5 group-hover:opacity-0 transition-opacity">
                   {folderUnreadCount}
                 </span>
               )}
             </button>
             <button
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMenu(!showMenu); }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setShowMenu(!showMenu);
+              }}
               className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded transition-all z-10"
             >
               <MoreVertical className="w-3.5 h-3.5 text-gray-500" />
@@ -216,14 +286,24 @@ function DroppableFolder({
                 <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
                 <div className="absolute right-2 top-10 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1 min-w-[140px]">
                   <button
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsEditing(true); setShowMenu(false); }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsEditing(true);
+                      setShowMenu(false);
+                    }}
                     className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
                   >
                     <Edit className="w-3.5 h-3.5" />
                     Переименовать
                   </button>
                   <button
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRemove(); setShowMenu(false); }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onRemove();
+                      setShowMenu(false);
+                    }}
                     className="w-full px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -241,17 +321,44 @@ function DroppableFolder({
           {folderFeeds.length === 0 ? (
             <p className="text-xs text-gray-400 px-3 py-1">Перетащите источник сюда</p>
           ) : (
-            folderFeeds.map((feed) => (
-              <DraggableFeed
-                key={feed.id}
-                feed={feed}
-                articleCount={getArticleCountForFeed(feed.id)}
-                isActive={currentPath === `/feed/${feed.id}`}
-                isInFolder
-                onHide={onHideFeed}
-                onDelete={onDeleteFeed}
-              />
-            ))
+            <>
+              {/* "Все ленты" aggregator */}
+              {(() => {
+                const allFeedsKey = `feed:${folderFeeds[0]?.id}:all`;
+                const isAllActive = activeKey === allFeedsKey;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => onSelectFolder(folder, folderFeeds)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs transition-colors text-left ${
+                      isAllActive ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Layers className="w-3.5 h-3.5 flex-shrink-0 text-blue-300" />
+                      <span className="truncate">Общая лента</span>
+                    </div>
+                    {folderUnreadCount > 0 && (
+                      <span className="text-xs bg-gray-100 text-gray-400 rounded-full px-2 py-0.5 flex-shrink-0">
+                        {folderUnreadCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })()}
+              {folderFeeds.map((feed) => (
+                <DraggableFeed
+                  key={feed.id}
+                  feed={feed}
+                  articleCount={getArticleCountForFeed(feed.id)}
+                  isActive={activeKey === `feed:${feed.id}`}
+                  isInFolder
+                  onSelect={() => onSelectFeed(feed)}
+                  onHide={onHideFeed}
+                  onDelete={onDeleteFeed}
+                />
+              ))}
+            </>
           )}
         </div>
       )}
@@ -261,7 +368,13 @@ function DroppableFolder({
 
 // ─── DroppableRootArea ────────────────────────────────────────
 
-function DroppableRootArea({ children, onDrop }: { children: React.ReactNode; onDrop: (feedId: string) => void }) {
+function DroppableRootArea({
+  children,
+  onDrop,
+}: {
+  children: React.ReactNode;
+  onDrop: (feedId: string) => void;
+}) {
   const [{ isOver }, drop] = useDrop(() => ({
     accept: ItemTypes.FEED,
     drop: (item: { feedId: string }) => onDrop(item.feedId),
@@ -277,8 +390,12 @@ function DroppableRootArea({ children, onDrop }: { children: React.ReactNode; on
 
 // ─── SidebarContent ───────────────────────────────────────────
 
-function SidebarContent() {
-  const location = useLocation();
+interface SidebarContentProps {
+  selectedSource: ArticleSource | null;
+  setSelectedSource: (source: ArticleSource | null) => void;
+}
+
+function SidebarContent({ selectedSource, setSelectedSource }: SidebarContentProps) {
   const navigate = useNavigate();
   const [feeds, setFeeds] = useState<RSSFeed[]>([]);
   const [folders, setFolders] = useState<ApiFolder[]>([]);
@@ -295,9 +412,11 @@ function SidebarContent() {
   } | null>(null);
   const [isCollecting, setIsCollecting] = useState(false);
 
+  const activeKey = sourceKey(selectedSource);
+
   useEffect(() => {
     loadData();
-  }, [location.pathname]);
+  }, []);
 
   useEffect(() => {
     const handler = () => loadData();
@@ -345,7 +464,6 @@ function SidebarContent() {
       setFolders(apiFolders);
       setTodayCount(todayArticles.length);
 
-      // Restore collapse state from localStorage
       setExpandedFolders((prev) => {
         const next = new Set(prev);
         apiFolders.forEach((f) => {
@@ -423,6 +541,9 @@ function SidebarContent() {
     const feed = feeds.find((f) => f.id === feedId);
     try {
       await api.patchFeed(parseInt(feedId), { hidden: !feed?.hidden });
+      if (selectedSource?.kind === "feed" && selectedSource.feedId === feedId) {
+        setSelectedSource(null);
+      }
       await loadData();
     } catch (e) {
       console.error("Ошибка при скрытии ленты:", e);
@@ -430,17 +551,64 @@ function SidebarContent() {
   };
 
   const handleRemoveFeed = async (feedId: string) => {
-    if (!confirm("Удалить источник?")) return;
+    if (!confirm("Отписаться от источника?")) return;
     try {
       await api.deleteFeed(parseInt(feedId));
+      if (selectedSource?.kind === "feed" && selectedSource.feedId === feedId) {
+        setSelectedSource(null);
+      }
       await loadData();
     } catch (e) {
       console.error("Ошибка при удалении ленты:", e);
     }
   };
 
+  const handleSelectFeed = (feed: RSSFeed) => {
+    // Toggle: повторный клик на активную ленту — закрывает панель
+    if (activeKey === `feed:${feed.id}`) {
+      setSelectedSource(null);
+      return;
+    }
+    setSelectedSource({
+      kind: "feed",
+      feedId: feed.id,
+      feedIds: feed.feedIds,
+      title: feed.title,
+      favicon_url: feed.favicon_url,
+    });
+  };
+
+  const handleSelectFolder = (folder: ApiFolder, folderFeeds: RSSFeed[]) => {
+    if (folderFeeds.length === 0) return;
+    const allFeedsKey = `feed:${folderFeeds[0].id}:all`;
+    if (activeKey === allFeedsKey) {
+      setSelectedSource(null);
+      return;
+    }
+    setSelectedSource({
+      kind: "feed",
+      feedId: `${folderFeeds[0].id}:all`,
+      feedIds: folderFeeds.map((f) => parseInt(f.id)),
+      title: folder.name,
+      favicon_url: folder.favicon_url ?? undefined,
+    });
+  };
+
+  const handleSelectSmart = (kind: "today" | "unread" | "saved" | "all") => {
+    if (activeKey === kind) {
+      setSelectedSource(null);
+      return;
+    }
+    setSelectedSource({ kind });
+  };
+
   const visibleFeeds = feeds.filter((f) => !f.hidden);
   const feedsWithoutFolder = visibleFeeds.filter((f) => !f.folderId);
+
+  const smartButtonClass = (kind: string) =>
+    `w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors text-left ${
+      activeKey === kind ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
+    }`;
 
   return (
     <aside className="w-full bg-white border-r border-gray-200 h-full overflow-y-auto flex-shrink-0">
@@ -449,12 +617,7 @@ function SidebarContent() {
         <div>
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Обзор</h3>
           <nav className="space-y-1">
-            <Link
-              to="/today"
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === "/today" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
+            <button type="button" onClick={() => handleSelectSmart("today")} className={smartButtonClass("today")}>
               <div className="flex items-center gap-3">
                 <Calendar className="w-4 h-4" />
                 <span>Сегодня</span>
@@ -462,14 +625,9 @@ function SidebarContent() {
               {todayCount > 0 && (
                 <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">{todayCount}</span>
               )}
-            </Link>
+            </button>
 
-            <Link
-              to="/unread"
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === "/unread" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
+            <button type="button" onClick={() => handleSelectSmart("unread")} className={smartButtonClass("unread")}>
               <div className="flex items-center gap-3">
                 <BookOpen className="w-4 h-4" />
                 <span>Непрочитанное</span>
@@ -477,31 +635,21 @@ function SidebarContent() {
               {unreadCount > 0 && (
                 <span className="text-xs bg-blue-600 text-white rounded-full px-2 py-0.5">{unreadCount}</span>
               )}
-            </Link>
+            </button>
 
-            <Link
-              to="/saved"
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === "/saved" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
+            <button type="button" onClick={() => handleSelectSmart("saved")} className={smartButtonClass("saved")}>
               <div className="flex items-center gap-3">
                 <Bookmark className="w-4 h-4" />
-                <span>Сохраненное</span>
+                <span>Сохранённое</span>
               </div>
-            </Link>
+            </button>
 
-            <Link
-              to="/articles"
-              className={`flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === "/articles" ? "bg-blue-100 text-blue-700" : "text-gray-700 hover:bg-gray-100"
-              }`}
-            >
+            <button type="button" onClick={() => handleSelectSmart("all")} className={smartButtonClass("all")}>
               <div className="flex items-center gap-3">
                 <FileText className="w-4 h-4" />
                 <span>Все посты</span>
               </div>
-            </Link>
+            </button>
           </nav>
         </div>
 
@@ -540,7 +688,14 @@ function SidebarContent() {
                   <button type="submit" className="p-1 hover:bg-green-100 rounded transition-colors">
                     <Check className="w-4 h-4 text-green-600" />
                   </button>
-                  <button type="button" onClick={() => { setShowNewFolderInput(false); setNewFolderName(""); }} className="p-1 hover:bg-gray-100 rounded transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewFolderInput(false);
+                      setNewFolderName("");
+                    }}
+                    className="p-1 hover:bg-gray-100 rounded transition-colors"
+                  >
                     <X className="w-4 h-4 text-gray-500" />
                   </button>
                 </form>
@@ -563,7 +718,9 @@ function SidebarContent() {
                     onRename={(name) => handleRenameFolder(folderId, name)}
                     onDrop={(feedId) => handleMoveFeedToFolder(feedId, folderId)}
                     getArticleCountForFeed={getArticleCountForFeed}
-                    currentPath={location.pathname}
+                    activeKey={activeKey}
+                    onSelectFeed={handleSelectFeed}
+                    onSelectFolder={handleSelectFolder}
                     onHideFeed={handleToggleFeedHidden}
                     onDeleteFeed={handleRemoveFeed}
                   />
@@ -573,7 +730,10 @@ function SidebarContent() {
               {feedsWithoutFolder.length === 0 && folders.length === 0 ? (
                 <div className="text-center py-4">
                   <p className="text-xs text-gray-500 mb-2">Нет источников</p>
-                  <button onClick={() => navigate("/")} className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+                  <button
+                    onClick={() => navigate("/")}
+                    className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                  >
                     Добавить первый источник
                   </button>
                 </div>
@@ -585,7 +745,8 @@ function SidebarContent() {
                         key={feed.id}
                         feed={feed}
                         articleCount={getArticleCountForFeed(feed.id)}
-                        isActive={location.pathname === `/feed/${feed.id}`}
+                        isActive={activeKey === `feed:${feed.id}`}
+                        onSelect={() => handleSelectFeed(feed)}
                         onHide={handleToggleFeedHidden}
                         onDelete={handleRemoveFeed}
                       />
@@ -622,9 +783,7 @@ function SidebarContent() {
                 })}
               </p>
             )}
-            {isCollecting && (
-              <p className="text-xs text-blue-500">Обновление...</p>
-            )}
+            {isCollecting && <p className="text-xs text-blue-500">Обновление...</p>}
           </div>
           <button
             type="button"
@@ -641,10 +800,15 @@ function SidebarContent() {
   );
 }
 
-export function Sidebar() {
+interface SidebarProps {
+  selectedSource: ArticleSource | null;
+  setSelectedSource: (source: ArticleSource | null) => void;
+}
+
+export function Sidebar({ selectedSource, setSelectedSource }: SidebarProps) {
   return (
     <DndProvider backend={HTML5Backend}>
-      <SidebarContent />
+      <SidebarContent selectedSource={selectedSource} setSelectedSource={setSelectedSource} />
     </DndProvider>
   );
 }

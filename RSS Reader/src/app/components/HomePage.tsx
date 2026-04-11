@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useOutletContext } from "react-router";
 import { Rss, TrendingUp, Newspaper, Search, Users, BarChart3, Clock, Layers, Eye, Loader2, ArrowRight } from "lucide-react";
 import { api, ApiCatalogFeed, ApiFeed } from "../lib/api";
-import { RSSFeed } from "../types";
+import { OutletCtx, sourceKey } from "../types";
 
 function getDomain(url: string): string {
   try {
@@ -46,9 +46,10 @@ function FeedIcon({ faviconUrl, category }: { faviconUrl: string | null; categor
 
 export function HomePage() {
   const navigate = useNavigate();
-  const context = useOutletContext<{ setSelectedFeed?: (feed: RSSFeed | null) => void; selectedFeed?: RSSFeed | null }>();
-  const setSelectedFeed = context?.setSelectedFeed;
-  const selectedFeed = context?.selectedFeed;
+  const context = useOutletContext<OutletCtx | undefined>();
+  const setSelectedSource = context?.setSelectedSource;
+  const selectedSource = context?.selectedSource ?? null;
+  const activeKey = sourceKey(selectedSource);
 
   const [catalog, setCatalog] = useState<ApiCatalogFeed[]>([]);
   const [hiddenFeeds, setHiddenFeeds] = useState<ApiFeed[]>([]);
@@ -137,14 +138,13 @@ export function HomePage() {
 
   const handleCardClick = (e: React.MouseEvent, representative: ApiCatalogFeed, allFeeds: ApiCatalogFeed[], sourceName: string) => {
     e.stopPropagation();
-    if (!setSelectedFeed) return;
-    setSelectedFeed({
-      id: representative.id.toString(),
-      title: sourceName,
-      url: representative.url,
-      description: representative.source_description ?? representative.description ?? undefined,
-      favicon_url: representative.favicon_url ?? undefined,
+    if (!setSelectedSource) return;
+    setSelectedSource({
+      kind: "feed",
+      feedId: representative.id.toString(),
       feedIds: allFeeds.map((f) => f.id),
+      title: sourceName,
+      favicon_url: representative.favicon_url ?? undefined,
     });
   };
 
@@ -312,7 +312,7 @@ export function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {filteredGroups.map(({ domain, feeds, representative, sourceName, latestPostAt, isSubscribed, categories }) => {
               const hasMultiple = feeds.length > 1;
-              const isActive = selectedFeed?.id === representative.id.toString();
+              const isActive = activeKey === `feed:${representative.id.toString()}`;
               return (
                 <div
                   key={domain}

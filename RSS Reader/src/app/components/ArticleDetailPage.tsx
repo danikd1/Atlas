@@ -3,6 +3,8 @@ import { useParams, useNavigate } from "react-router";
 import { ArrowLeft, ExternalLink, Clock, Loader2, AlertCircle } from "lucide-react";
 import { api, ApiArticleDetail } from "../lib/api";
 import { StarButton } from "./StarButton";
+import { TranslateButton, TranslationResult } from "./TranslateButton";
+import { translationCache } from "../lib/translationCache";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale/ru";
 
@@ -13,9 +15,30 @@ export function ArticleDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
+  // Перевод: берём из кэша или получаем по запросу
+  const [translation, setTranslation] = useState<TranslationResult | null>(null);
+  const [showingTranslation, setShowingTranslation] = useState(false);
+
+  const isTranslated = translation !== null;
+
+  // Проверка языка: кириллица в заголовке или summary → статья русская
+  const hasCyrillic = (text: string | null | undefined) =>
+    text ? /[а-яёА-ЯЁ]/.test(text) : false;
+  const isRussian = !isTranslated && (hasCyrillic(article?.title) || hasCyrillic(article?.summary));
+
+  // Отображаемый контент — перевод или оригинал
+  const displayTitle = showingTranslation && translation ? (translation.title ?? article?.title) : article?.title;
+  const displaySummary = showingTranslation && translation ? (translation.summary ?? article?.summary) : article?.summary;
+  const displayFullText = showingTranslation && translation ? (translation.full_text ?? article?.full_text) : article?.full_text;
+
   useEffect(() => {
     if (!id) return;
-    loadArticle(parseInt(id));
+    const articleId = parseInt(id);
+    // Проверяем кэш — вдруг уже переводили эту статью
+    const cached = translationCache.get(articleId);
+    setTranslation(cached);
+    setShowingTranslation(cached !== null);
+    loadArticle(articleId);
   }, [id]);
 
   const loadArticle = async (articleId: number) => {
@@ -51,7 +74,7 @@ export function ArticleDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto" onClick={(e) => e.stopPropagation()}>
         <button
           type="button"
           onClick={() => navigate(-1)}
@@ -72,7 +95,7 @@ export function ArticleDetailPage() {
 
   if (notFound || !article) {
     return (
-      <div className="max-w-3xl mx-auto">
+      <div className="max-w-3xl mx-auto" onClick={(e) => e.stopPropagation()}>
         <button
           type="button"
           onClick={() => navigate(-1)}
@@ -90,7 +113,7 @@ export function ArticleDetailPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-3xl mx-auto" onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         onClick={() => navigate(-1)}
@@ -110,7 +133,7 @@ export function ArticleDetailPage() {
         )}
 
         <h1 className="text-2xl font-semibold text-gray-900 mb-4 leading-tight">
-          {article.title ?? "Без заголовка"}
+          {displayTitle ?? "Без заголовка"}
         </h1>
 
         <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500 mb-6 pb-6 border-b border-gray-200">
@@ -121,10 +144,23 @@ export function ArticleDetailPage() {
             </div>
           )}
           <div className="flex items-center gap-3 ml-auto">
+            {!isRussian && (
+              <TranslateButton
+                articleId={article.id}
+                isTranslated={isTranslated}
+                isShowingTranslation={showingTranslation}
+                onTranslated={(result) => {
+                  setTranslation(result);
+                  setShowingTranslation(true);
+                }}
+                onToggle={(show) => setShowingTranslation(show)}
+              />
+            )}
             <StarButton
               link={article.link}
               isSaved={article.is_saved}
               onToggle={(saved) => setArticle((prev) => prev ? { ...prev, is_saved: saved } : prev)}
+              size="md"
             />
             <a
               href={article.link}
@@ -138,14 +174,14 @@ export function ArticleDetailPage() {
           </div>
         </div>
 
-        {article.full_text ? (
+        {displayFullText ? (
           <div
             className="prose prose-gray max-w-none prose-a:text-blue-600 prose-img:rounded-lg"
-            dangerouslySetInnerHTML={{ __html: article.full_text }}
+            dangerouslySetInnerHTML={{ __html: displayFullText }}
           />
         ) : (
           <div className="text-gray-700">
-            {article.summary && <p className="leading-relaxed">{article.summary}</p>}
+            {displaySummary && <p className="leading-relaxed">{displaySummary}</p>}
             <div className="mt-6 p-4 bg-gray-50 rounded-md border border-gray-200">
               <p className="text-sm text-gray-500">
                 Полный текст недоступен.{" "}

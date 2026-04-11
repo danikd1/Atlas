@@ -52,6 +52,7 @@ export interface ApiArticleItem {
   summary: string | null;
   published_at: string | null;
   source: string | null;
+  feed_id: number | null;
   is_read: boolean;
   is_saved: boolean;
 }
@@ -213,6 +214,12 @@ export const api = {
     return res.json();
   },
 
+  async searchArticles(query: string, limit = 20): Promise<ApiArticleItem[]> {
+    const res = await fetch(`${API_BASE}/api/articles/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+    if (!res.ok) throw new Error("Ошибка поиска");
+    return res.json();
+  },
+
   async markArticleRead(link: string): Promise<void> {
     const res = await fetch(`${API_BASE}/api/articles/read`, {
       method: "POST",
@@ -220,6 +227,12 @@ export const api = {
       body: JSON.stringify({ link }),
     });
     if (!res.ok) throw new Error("Не удалось пометить статью прочитанной");
+  },
+
+  async translateArticle(id: number): Promise<{ title: string | null; summary: string | null; full_text: string | null }> {
+    const res = await fetch(`${API_BASE}/api/articles/${id}/translate`, { method: "POST" });
+    if (!res.ok) throw new Error("Ошибка перевода статьи");
+    return res.json();
   },
 
   async unmarkArticleRead(link: string): Promise<void> {
@@ -305,6 +318,54 @@ export const api = {
   async summarizeArticle(id: number): Promise<{ ai_summary: string | null; cached: boolean; error?: string }> {
     const res = await fetch(`${API_BASE}/api/articles/${id}/summarize`, { method: "POST" });
     if (!res.ok) throw new Error("Не удалось получить резюме");
+    return res.json();
+  },
+
+  async feedQA(params: {
+    feed_ids: number[];
+    question: string;
+    from_date?: string;
+    to_date?: string;
+    top_k?: number;
+  }): Promise<{
+    status: string;
+    answer: string | null;
+    sources: { link: string; title: string; feed_name: string; published_at: string | null; snippet: string; article_id: number }[];
+    article_count: number;
+    error?: string;
+  }> {
+    const res = await fetch(`${API_BASE}/api/feeds/qa`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error("Ошибка QA");
+    return res.json();
+  },
+
+  async feedDigest(params: {
+    feed_ids: number[];
+    from_date?: string;
+    to_date?: string;
+  }): Promise<{
+    title: string;
+    feed_ids: number[];
+    generated_at: string;
+    from_date: string | null;
+    to_date: string | null;
+    article_count: number;
+    sections: Record<string, {
+      label: string;
+      description: string;
+      articles: { link: string; title: string; published_at: string | null; article_id: number }[];
+    }[]>;
+  }> {
+    const res = await fetch(`${API_BASE}/api/feeds/digest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!res.ok) throw new Error("Ошибка дайджеста");
     return res.json();
   },
 };

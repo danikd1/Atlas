@@ -40,6 +40,10 @@ from .schemas import (
     FolderItem,
     FolderUpdate,
     PipelineRunRequest,
+    FeedDigestRequest,
+    FeedQARequest,
+    FeedQAResponse,
+    FeedQASourceItem,
     PipelineRunResponse,
     QARequest,
     QAResponse,
@@ -500,6 +504,68 @@ def get_digest(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post(
+    "/api/feeds/qa",
+    tags=["Q&A"],
+    summary="QA по статьям из лент (без RAG)",
+    response_model=FeedQAResponse,
+)
+def feed_qa(body: FeedQARequest):
+    """QA по статьям пользователя из указанных лент. Не требует предварительной индексации."""
+    try:
+        from src.qa.feed_qa import FeedQAOptions, answer_question_by_feeds
+        opts = FeedQAOptions(
+            top_k=body.top_k,
+            from_date=body.from_date,
+            to_date=body.to_date,
+        )
+        result = answer_question_by_feeds(body.question.strip(), body.feed_ids, opts)
+        return FeedQAResponse(
+            status="ok",
+            answer=result.answer,
+            sources=[
+                FeedQASourceItem(
+                    link=s.link,
+                    title=s.title,
+                    feed_name=s.feed_name,
+                    published_at=s.published_at,
+                    snippet=s.snippet,
+                    article_id=s.article_id,
+                )
+                for s in result.sources
+            ],
+            article_count=result.article_count,
+        )
+    except Exception as e:
+        logger.exception("FeedQA error: %s", e)
+        return FeedQAResponse(status="error", error=str(e))
+
+
+@app.post(
+    "/api/feeds/digest",
+    tags=["Дайджест"],
+    summary="Дайджест по статьям из лент (без RAG)",
+)
+def feed_digest(body: FeedDigestRequest):
+    """Дайджест по статьям из указанных лент за период. Не требует предварительной индексации."""
+    try:
+        from src.digest.feed_digest import FeedDigestOptions, build_digest_by_feeds
+        opts = FeedDigestOptions(from_date=body.from_date, to_date=body.to_date)
+        result = build_digest_by_feeds(body.feed_ids, opts)
+        return {
+            "title": result.title,
+            "feed_ids": result.feed_ids,
+            "generated_at": result.generated_at,
+            "from_date": result.from_date,
+            "to_date": result.to_date,
+            "article_count": result.article_count,
+            "sections": serialize_digest_section_item(result.sections),
+        }
+    except Exception as e:
+        logger.exception("FeedDigest error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Ленты — управление RSS-лентами и подписками
 # ---------------------------------------------------------------------------
@@ -870,6 +936,21 @@ def get_articles_by_feeds(feed_ids: str, page: int = 1):
 
 
 @app.get(
+    "/api/articles/search",
+    tags=["Статьи"],
+    summary="Поиск статей по заголовку и summary",
+    response_model=list[ArticleItem],
+)
+def search_articles_endpoint(q: str, limit: int = 20):
+    """Полнотекстовый поиск (ILIKE) по title, ai_summary, summary. Только ленты пользователя."""
+    if not q or len(q.strip()) < 2:
+        return []
+    from src.tools.db_state import get_connection, search_articles
+    conn = get_connection()
+    return [ArticleItem(**a) for a in search_articles(conn, q.strip(), limit=min(limit, 50))]
+
+
+@app.get(
     "/api/articles/{article_id}",
     tags=["Статьи"],
     summary="Полные данные статьи (Reader mode)",
@@ -978,6 +1059,33 @@ def summarize_article_endpoint(article_id: int, force: bool = False):
     save_ai_summary(conn, article_id, summary)
 
     return SummarizeResponse(ai_summary=summary, cached=False)
+
+
+@app.post(
+    "/api/articles/{article_id}/translate",
+    tags=["Статьи"],
+    summary="Перевод статьи EN → RU",
+)
+def translate_article_endpoint(article_id: int):
+    """
+    Переводит title, summary и full_text статьи с EN на RU.
+    Использует Helsinki-NLP/opus-mt-en-ru (MarianMT), локально.
+    Модель загружается при первом вызове (~10 сек), затем кэшируется в памяти.
+    """
+    from src.tools.db_state import get_connection, get_article_by_id
+    from src.tools.translation import translate_article
+
+    conn = get_connection()
+    article = get_article_by_id(conn, article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="Статья не найдена")
+
+    translated = translate_article(
+        title=article.get("title"),
+        summary=article.get("summary"),
+        full_text=article.get("full_text"),
+    )
+    return translated
 
 
 @app.post(

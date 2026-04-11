@@ -6,9 +6,10 @@ interface StarButtonProps {
   isSaved: boolean;
   onToggle: (saved: boolean) => void;
   size?: "sm" | "md";
+  strokeWidth?: number;
 }
 
-export function StarButton({ link, isSaved, onToggle, size = "md" }: StarButtonProps) {
+export function StarButton({ link, isSaved, onToggle, size = "md", strokeWidth = 2 }: StarButtonProps) {
   const handleClick = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -36,20 +37,21 @@ export function StarButton({ link, isSaved, onToggle, size = "md" }: StarButtonP
     <div className="relative group/star flex-shrink-0">
       <button
         onClick={handleClick}
-        className={`${btnClass} ${
+        className={`${btnClass} rounded-lg transition-colors ${
           isSaved
-            ? "text-yellow-500 hover:text-yellow-600"
-            : "text-gray-300 hover:text-yellow-400"
+            ? "text-yellow-500 hover:text-yellow-600 hover:bg-gray-200"
+            : "text-gray-300 hover:text-yellow-400 hover:bg-gray-200"
         }`}
       >
-        <Star className={`${iconClass} ${isSaved ? "fill-current" : ""}`} />
+        <Star className={`${iconClass} ${isSaved ? "fill-current" : ""}`} strokeWidth={strokeWidth} />
       </button>
 
       {/* Tooltip */}
-      <div className="pointer-events-none absolute bottom-full right-0 mb-1.5 hidden group-hover/star:block z-50">
+      <div className="pointer-events-none absolute bottom-full right-0 mb-2 hidden group-hover/star:block z-50">
         <div className="bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
           {label}
         </div>
+        <div className="absolute top-full right-2.5 border-4 border-transparent border-t-gray-800" />
       </div>
     </div>
   );

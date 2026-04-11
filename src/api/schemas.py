@@ -314,6 +314,7 @@ class ArticleItem(BaseModel):
     summary: Optional[str] = Field(default=None, description="Краткое описание.")
     published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
     source: Optional[str] = Field(default=None, description="Название источника.")
+    feed_id: Optional[int] = Field(default=None, description="ID ленты в которой опубликована статья.")
     is_read: bool = Field(default=False, description="Прочитана ли статья текущим пользователем.")
     is_saved: bool = Field(default=False, description="Добавлена ли статья в закладки.")
 
@@ -408,6 +409,53 @@ class CatalogFeedItem(BaseModel):
     source_description: Optional[str] = Field(default=None, description="Описание источника (домена).")
 
     model_config = {"from_attributes": True}
+
+
+class FeedQARequest(BaseModel):
+    """Запрос QA по статьям из лент (без RAG-коллекций)."""
+    feed_ids: List[int] = Field(..., min_length=1, description="ID лент пользователя.")
+    question: str = Field(..., min_length=1, description="Вопрос пользователя.")
+    from_date: Optional[datetime] = Field(default=None, description="Начало периода (ISO 8601).")
+    to_date: Optional[datetime] = Field(default=None, description="Конец периода (ISO 8601).")
+    top_k: int = Field(default=12, ge=1, le=40, description="Количество статей-источников для контекста.")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"feed_ids": [1, 2, 3], "question": "Какие новые LLM вышли за последний месяц?"}
+        }
+    }
+
+
+class FeedQASourceItem(BaseModel):
+    """Источник в ответе QA по лентам."""
+    link: str
+    title: str
+    feed_name: str
+    published_at: Optional[datetime] = None
+    snippet: str
+    article_id: int = 0
+
+
+class FeedQAResponse(BaseModel):
+    """Ответ QA по лентам."""
+    status: str
+    answer: Optional[str] = None
+    sources: List[FeedQASourceItem] = []
+    article_count: int = 0
+    error: Optional[str] = None
+
+
+class FeedDigestRequest(BaseModel):
+    """Запрос дайджеста по статьям из лент."""
+    feed_ids: List[int] = Field(..., min_length=1, description="ID лент пользователя.")
+    from_date: Optional[datetime] = Field(default=None, description="Начало периода.")
+    to_date: Optional[datetime] = Field(default=None, description="Конец периода.")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"feed_ids": [1, 2, 3]}
+        }
+    }
 
 
 def serialize_digest_section_item(obj: Any) -> Any:

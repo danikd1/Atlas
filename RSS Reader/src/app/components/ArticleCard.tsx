@@ -26,6 +26,8 @@ interface ArticleCardProps {
   onClick?: (article: ApiArticleItem) => void;
   /** Show source name prefix (used in multi-feed sidebars) */
   showSource?: boolean;
+  /** Подсветка активной (открытой сейчас) карточки. Используется в sidebar-варианте. */
+  isActive?: boolean;
 }
 
 function relativeTime(dateStr: string | null): string {
@@ -45,6 +47,7 @@ export function ArticleCard({
   onReadChange,
   onClick,
   showSource = false,
+  isActive = false,
 }: ArticleCardProps) {
   // Состояние резюме живёт здесь — страницам не нужно знать про него
   const [summaryText, setSummaryText] = useState<string | null>(null);
@@ -193,12 +196,41 @@ export function ArticleCard({
   }
 
   // ── sidebar variant (ArticlesSidebar) ───────────────────────────────────
+  // Для этого варианта кнопки action (лампочка + звезда) вынесены в нижний
+  // правый угол и делаются чуть крупнее, а активная карточка (открытая в
+  // reader) подсвечивается голубым + синяя полоска слева.
+  const sidebarActionButtons = (
+    <>
+      <SummarizeButton
+        articleId={article.id}
+        hasSummary={summaryText !== null}
+        summaryVisible={summaryVisible}
+        onLoad={handleSummaryLoad}
+        onToggle={handleSummaryToggle}
+        size="md"
+        strokeWidth={3}
+      />
+      <StarButton
+        link={article.link}
+        isSaved={article.is_saved}
+        onToggle={handleSavedToggle}
+        size="md"
+        strokeWidth={3}
+      />
+    </>
+  );
+
   return (
-    <div>
+    <div className="relative group/sidebar-card">
+      {isActive && (
+        <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500 z-10" />
+      )}
       <Link
         to={`/article/${article.id}`}
         onClick={() => onClick?.(article)}
-        className="block px-4 py-3 hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-0"
+        className={`block px-4 py-3 transition-colors border-b border-gray-100 last:border-0 ${
+          isActive ? "bg-blue-50" : "hover:bg-gray-50"
+        }`}
       >
         <div className="flex items-start gap-2">
           <div className="mt-1.5 flex-shrink-0">
@@ -206,24 +238,34 @@ export function ArticleCard({
           </div>
 
           <div className="flex-1 min-w-0">
-            {showSource && article.source && (
-              <p className="text-xs text-blue-500 font-medium mb-0.5 truncate">{article.source}</p>
-            )}
             <h3 className={`text-sm mb-1 line-clamp-2 leading-snug ${
-              article.is_read ? "font-normal text-gray-500" : "font-medium text-gray-900"
+              isActive
+                ? "font-bold text-blue-600"
+                : article.is_read
+                  ? "font-normal text-gray-500"
+                  : "font-semibold text-gray-900"
             }`}>
               {article.title ?? "Без заголовка"}
             </h3>
             {article.summary && (
-              <p className="text-xs text-gray-400 line-clamp-2 mb-1 leading-relaxed">
+              <p className="text-xs text-gray-500 line-clamp-2 mb-2 leading-relaxed">
                 {article.summary}
               </p>
             )}
-            {timeStr && <span className="text-xs text-gray-400">{timeStr}</span>}
-          </div>
 
-          <div className="flex items-center gap-1 flex-shrink-0">
-            {actionButtons}
+            {/* Нижняя строка: источник/время слева, кнопки справа */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 text-xs text-gray-400 min-w-0">
+                {showSource && article.source && (
+                  <span className="text-blue-500 font-medium truncate">{article.source}</span>
+                )}
+                {showSource && article.source && timeStr && <span>·</span>}
+                {timeStr && <span className="truncate">{timeStr}</span>}
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover/sidebar-card:opacity-100 transition-opacity">
+                {sidebarActionButtons}
+              </div>
+            </div>
           </div>
         </div>
       </Link>

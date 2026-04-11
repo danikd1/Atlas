@@ -46,3 +46,33 @@ export interface RSSArticle {
   read: boolean;
   saved?: boolean;
 }
+
+// ─── Article source для ArticlesSidebar ─────────────────────────────────────
+//
+// Определяет откуда подгружаются статьи в среднюю панель при клике на элемент
+// в левом сайдбаре. Одна из четырёх "умных папок" либо конкретная лента
+// (одиночная или мульти — группа лент домена).
+
+export type ArticleSource =
+  | { kind: "today" }
+  | { kind: "unread" }
+  | { kind: "saved" }
+  | { kind: "all" }
+  | {
+      kind: "feed";
+      feedId: string;
+      feedIds?: number[]; // для мульти-лентных источников: все id лент
+      title: string;
+      favicon_url?: string;
+    };
+
+export function sourceKey(source: ArticleSource | null): string | null {
+  if (!source) return null;
+  if (source.kind === "feed") return `feed:${source.feedId}`;
+  return source.kind;
+}
+
+export interface OutletCtx {
+  selectedSource: ArticleSource | null;
+  setSelectedSource: (source: ArticleSource | null) => void;
+}

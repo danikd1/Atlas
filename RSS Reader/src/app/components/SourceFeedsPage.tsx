@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router";
+import { useParams, useNavigate, useOutletContext } from "react-router";
 import { ArrowLeft, Rss, TrendingUp, Users, BarChart3, Clock, Loader2 } from "lucide-react";
 import { api, ApiCatalogFeed } from "../lib/api";
+import { OutletCtx, sourceKey } from "../types";
 
 function getDomain(url: string): string {
   try {
@@ -53,6 +54,9 @@ const formatRelativeTime = (dateString: string | null): string => {
 export function SourceFeedsPage() {
   const { feedUrl } = useParams<{ feedUrl: string }>();
   const navigate = useNavigate();
+  const context = useOutletContext<OutletCtx | undefined>();
+  const setSelectedSource = context?.setSelectedSource;
+  const activeKey = sourceKey(context?.selectedSource ?? null);
 
   const [feeds, setFeeds] = useState<ApiCatalogFeed[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -107,7 +111,7 @@ export function SourceFeedsPage() {
       {/* Header */}
       <div className="mb-8">
         <button
-          onClick={() => navigate("/")}
+          onClick={(e) => { e.stopPropagation(); navigate("/"); }}
           className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -138,11 +142,26 @@ export function SourceFeedsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {feeds.map((feed) => (
+          {feeds.map((feed) => {
+            const isActive = activeKey === `feed:${feed.id.toString()}`;
+            return (
             <div
               key={feed.id}
-              className={`bg-white rounded-lg shadow-sm border-2 p-5 hover:shadow-md transition-all ${
-                feed.is_subscribed ? "border-blue-200 bg-blue-50/20" : "border-gray-200"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedSource?.({
+                  kind: "feed",
+                  feedId: feed.id.toString(),
+                  title: feed.name,
+                  favicon_url: feed.favicon_url ?? undefined,
+                });
+              }}
+              className={`bg-white rounded-lg shadow-sm border-2 p-5 hover:shadow-md transition-all cursor-pointer ${
+                isActive
+                  ? "border-blue-500 ring-2 ring-blue-200"
+                  : feed.is_subscribed
+                  ? "border-blue-200 bg-blue-50/20"
+                  : "border-gray-200"
               }`}
             >
               <div className="flex items-start gap-4 mb-4">
@@ -187,9 +206,10 @@ export function SourceFeedsPage() {
 
               {/* Action Button */}
               <button
-                onClick={() =>
-                  feed.is_subscribed ? handleUnsubscribe(feed) : handleSubscribe(feed)
-                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  feed.is_subscribed ? handleUnsubscribe(feed) : handleSubscribe(feed);
+                }}
                 className={`text-sm px-4 py-1.5 rounded-md transition-colors ${
                   feed.is_subscribed
                     ? "bg-gray-100 text-gray-700 hover:bg-red-50 hover:text-red-600"
@@ -199,7 +219,8 @@ export function SourceFeedsPage() {
                 {feed.is_subscribed ? "Отписаться" : "Подписаться"}
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

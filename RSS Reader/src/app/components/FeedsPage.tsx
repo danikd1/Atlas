@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useOutletContext } from "react-router";
 import { Plus, ExternalLink, Eye, EyeOff, Rss, Layers, Link as LinkIcon, ArrowLeft, Loader2, AlertTriangle } from "lucide-react";
-import { RSSFeed } from "../types";
+import { RSSFeed, OutletCtx } from "../types";
 import { api, apiFeedToRSSFeed, FeedValidateResponse } from "../lib/api";
 
 function getDomain(url: string): string {
@@ -13,7 +13,18 @@ function getDomain(url: string): string {
 }
 
 export function FeedsPage() {
-  const { setSelectedFeed } = useOutletContext<{ setSelectedFeed: (feed: RSSFeed | null) => void }>();
+  const ctx = useOutletContext<OutletCtx | undefined>();
+  const setSelectedSource = ctx?.setSelectedSource;
+  const selectFeed = (feed: RSSFeed) => {
+    if (!setSelectedSource) return;
+    setSelectedSource({
+      kind: "feed",
+      feedId: feed.id,
+      feedIds: feed.feedIds,
+      title: feed.title,
+      favicon_url: feed.favicon_url,
+    });
+  };
   const [feeds, setFeeds] = useState<RSSFeed[]>([]);
 
   // Форма: шаг 1 — ввод URL
@@ -34,7 +45,9 @@ export function FeedsPage() {
 
   const loadFeeds = async () => {
     try {
-      const apiFeeds = await api.getFeeds();
+      // include_hidden=true — страница управления должна показывать и скрытые
+      // ленты, чтобы их можно было вернуть обратно.
+      const apiFeeds = await api.getFeeds(true);
       setFeeds(apiFeeds.map(apiFeedToRSSFeed));
     } catch (e) {
       console.error("Ошибка загрузки лент:", e);
@@ -85,6 +98,7 @@ export function FeedsPage() {
         category: previewCategory.trim() || null,
       });
       await loadFeeds();
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
       resetForm();
     } catch {
       setValidateError("Ошибка при добавлении ленты.");
@@ -101,6 +115,7 @@ export function FeedsPage() {
     try {
       await Promise.all(toRemove.map((f) => api.deleteFeed(parseInt(f.id))));
       await loadFeeds();
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
     } catch (e) {
       console.error("Ошибка при удалении:", e);
     }
@@ -114,6 +129,7 @@ export function FeedsPage() {
     try {
       await Promise.all(toUpdate.map((f) => api.patchFeed(parseInt(f.id), { hidden: newHidden })));
       await loadFeeds();
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
     } catch (e) {
       console.error("Ошибка при обновлении:", e);
     }
@@ -292,7 +308,7 @@ export function FeedsPage() {
               return (
                 <div
                   key={domain}
-                  onClick={() => setSelectedFeed(firstFeed)}
+                  onClick={() => selectFeed(firstFeed)}
                   className={`relative overflow-hidden rounded-xl border-2 transition-all hover:shadow-lg cursor-pointer ${
                     isHidden
                       ? "bg-gray-50 border-gray-300 opacity-75"
@@ -397,7 +413,7 @@ export function FeedsPage() {
               return (
                 <div
                   key={feed.id}
-                  onClick={() => setSelectedFeed(feed)}
+                  onClick={() => selectFeed(feed)}
                   className={`relative overflow-hidden rounded-xl border-2 transition-all hover:shadow-lg cursor-pointer ${
                     isHidden
                       ? "bg-gray-50 border-gray-300 opacity-75"

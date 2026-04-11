@@ -985,7 +985,10 @@ def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False
     if conn is None:
         return []
     _user_id = user_id if user_id is not None else 0
-    hidden_filter = "" if include_hidden else "AND uf.hidden = FALSE"
+    # WHERE-клауза: фильтр по hidden должен быть в WHERE, а не после LEFT JOIN
+    # (иначе парсер воспринимает его как продолжение ON-клаузы и хидден ленты
+    # всё равно попадают в результат).
+    hidden_where = "" if include_hidden else "WHERE uf.hidden = FALSE"
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -1000,7 +1003,7 @@ def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False
             JOIN user_feeds uf ON uf.feed_id = f.id AND uf.user_id = %s
             LEFT JOIN processed_articles pa ON pa.feed_id = f.id
             LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
-            {hidden_filter}
+            {hidden_where}
             GROUP BY f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
                      f.error_count, f.last_fetched_at, f.last_error,
                      uf.folder_id, uf.position, uf.hidden, uf.created_at
@@ -1913,5 +1916,76 @@ def list_bookmarks(
             LIMIT %s OFFSET %s;
             """,
             (user_id, user_id, page_size, offset),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_articles_by_feed_ids(
+    conn,
+    feed_ids: list[int],
+    from_date=None,
+    to_date=None,
+    limit: int = 150,
+    user_id: int = 0,
+) -> list[dict]:
+    """Статьи из processed_articles по списку feed_ids (для QA/Digest без RAG)."""
+    if conn is None or not feed_ids:
+        return []
+    conditions = ["pa.feed_id = ANY(%s)"]
+    params: list = [feed_ids]
+    if from_date is not None:
+        conditions.append("pa.published_at >= %s")
+        params.append(from_date)
+    if to_date is not None:
+        conditions.append("pa.published_at <= %s")
+        params.append(to_date)
+    where = " AND ".join(conditions)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT pa.id, pa.link, pa.title, pa.ai_summary, pa.summary,
+                   pa.full_text, pa.published_at, pa.source, pa.feed_id,
+                   rf.name AS feed_name
+            FROM processed_articles pa
+            LEFT JOIN feeds rf ON rf.id = pa.feed_id
+            WHERE {where}
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT %s;
+            """,
+            params + [limit],
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def search_articles(conn, query: str, user_id: int = 0, limit: int = 20) -> list[dict]:
+    """Поиск статей по заголовку и ai_summary. Только по лентам пользователя."""
+    if conn is None:
+        return []
+    pattern = f"%{query}%"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.published_at,
+                pa.source,
+                pa.feed_id,
+                (ar.link IS NOT NULL) AS is_read,
+                (ab.link IS NOT NULL) AS is_saved
+            FROM processed_articles pa
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            LEFT JOIN article_bookmarks ab ON ab.link = pa.link AND ab.user_id = %s
+            WHERE
+                pa.title ILIKE %s
+                OR pa.ai_summary ILIKE %s
+                OR pa.summary ILIKE %s
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT %s;
+            """,
+            (user_id, user_id, user_id, pattern, pattern, pattern, limit),
         )
         return [dict(row) for row in cur.fetchall()]
