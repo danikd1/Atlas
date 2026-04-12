@@ -86,6 +86,18 @@ def ensure_tables(conn) -> None:
         return
 
     with conn.cursor() as cur:
+        # Таблица пользователей (аутентификация)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id            SERIAL PRIMARY KEY,
+                email         TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+
         # Таблица с обработанными статьями (title, summary нужны для пайплайна по окну из БД)
         cur.execute(
             f"""
@@ -2068,3 +2080,53 @@ def get_bertopic_topics(conn) -> List[Dict]:
             """
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Users (аутентификация)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def create_user(conn, email: str, password_hash: str) -> Optional[dict]:
+    """Создаёт пользователя. Возвращает {id, email} или None при дублирующем email."""
+    if conn is None:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (email, password_hash)
+                VALUES (%s, %s)
+                RETURNING id, email;
+                """,
+                (email, password_hash),
+            )
+            return dict(cur.fetchone())
+    except psycopg2.IntegrityError:
+        return None
+
+
+def get_user_by_email(conn, email: str) -> Optional[dict]:
+    """Возвращает пользователя по email или None."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, email, password_hash FROM users WHERE email = %s;",
+            (email,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(conn, user_id: int) -> Optional[dict]:
+    """Возвращает пользователя по id или None."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, email FROM users WHERE id = %s;",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None

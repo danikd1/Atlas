@@ -358,3 +358,13 @@ DIGEST_MAX_ARTICLES_PER_CLUSTER = 3  # макс. статей (по link) в б�
 DIGEST_LLM_LANGUAGE = "ru"  # "ru" | "en"
 DIGEST_TYPICAL_CHUNKS_PER_CLUSTER = 5  # сколько чанков отдавать в LLM для описания кластера
 
+# JWT-аутентификация
+JWT_SECRET = os.environ.get("JWT_SECRET", "atlas-dev-secret-change-in-prod")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 7
+
+# CORS: допустимые origins (через запятую в env)
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000"
+).split(",")
+

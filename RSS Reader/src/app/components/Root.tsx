@@ -1,12 +1,17 @@
-import { Outlet, Link, useLocation, useNavigate } from "react-router";
-import { Newspaper, Rss, Home, Search, X, Map } from "lucide-react";
+import { Outlet, Link, useLocation, useNavigate, Navigate } from "react-router";
+import { Newspaper, Rss, Home, Search, X, Map, LogOut } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArticleSource, OutletCtx } from "../types";
 import { api, ApiArticleItem } from "../lib/api";
+import { authService } from "../lib/authService";
 
 export function Root() {
+  // ── Auth guard ────────────────────────────────────────────────
+  if (!authService.isAuthenticated()) {
+    return <Navigate to="/login" replace />;
+  }
   const location = useLocation();
   const navigate = useNavigate();
   const [selectedSource, setSelectedSourceState] = useState<ArticleSource | null>(null);
@@ -227,6 +232,18 @@ export function Root() {
                 Карта
               </Link>
             </nav>
+
+            <button
+              onClick={() => {
+                authService.logout();
+                navigate("/login", { replace: true });
+              }}
+              className="ml-4 px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+              title="Выйти"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Выйти</span>
+            </button>
           </div>
         </div>
       </header>

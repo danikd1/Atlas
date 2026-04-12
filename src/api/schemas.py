@@ -8,6 +8,32 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+# ─── Auth ──────────────────────────────────────────────────────────────────
+
+
+class AuthRegister(BaseModel):
+    email: str = Field(..., min_length=3, description="Email пользователя")
+    password: str = Field(..., min_length=6, description="Пароль (мин. 6 символов)")
+
+
+class AuthLogin(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserInfo(BaseModel):
+    id: int
+    email: str
+
+
+# ─── Router ──────���─────────────────────────────────────────────────────────
+
+
 class RouterRequest(BaseModel):
     """Запрос к роутеру: подбор узлов таксономии по тексту на естественном языке."""
 

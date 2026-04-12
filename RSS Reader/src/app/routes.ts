@@ -5,8 +5,12 @@ import { FeedsPage } from "./components/FeedsPage";
 import { ArticleDetailPage } from "./components/ArticleDetailPage";
 import { SourceFeedsPage } from "./components/SourceFeedsPage";
 import { TopicMapPage } from "./components/TopicMapPage";
+import { LoginPage } from "./components/LoginPage";
+import { RegisterPage } from "./components/RegisterPage";
 
 export const router = createBrowserRouter([
+  { path: "login", Component: LoginPage },
+  { path: "register", Component: RegisterPage },
   {
     path: "/",
     Component: Root,

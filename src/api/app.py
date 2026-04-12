@@ -17,15 +17,21 @@ from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+from src.auth.auth import get_current_user, hash_password, verify_password, create_access_token
+from config.config import ALLOWED_ORIGINS
 
 from .schemas import (
     ArticleDetail,
     ArticleItem,
     ArticleReadRequest,
+    AuthRegister,
+    AuthLogin,
+    AuthResponse,
     BookmarkRequest,
     SummarizeResponse,
     CatalogFeedItem,
@@ -58,6 +64,7 @@ from .schemas import (
     BertopicStatusResponse,
     BertopicTopicItem,
     BertopicTopicsResponse,
+    UserInfo,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,7 +201,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -225,6 +232,52 @@ def health():
     return {"status": "ok"}
 
 
+# ─── Auth ──────────────────────────────────────────────────────────────────
+
+@app.post(
+    "/api/auth/register",
+    tags=["Auth"],
+    summary="Регистрация нового пользователя",
+    response_model=AuthResponse,
+)
+def auth_register(body: AuthRegister):
+    from src.tools.db_state import get_connection, create_user
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="БД недоступна")
+    user = create_user(conn, email=body.email.strip().lower(), password_hash=hash_password(body.password))
+    if user is None:
+        raise HTTPException(status_code=400, detail="Пользователь с таким email уже существует")
+    return AuthResponse(access_token=create_access_token(user["id"]))
+
+
+@app.post(
+    "/api/auth/login",
+    tags=["Auth"],
+    summary="Вход в систему",
+    response_model=AuthResponse,
+)
+def auth_login(body: AuthLogin):
+    from src.tools.db_state import get_connection, get_user_by_email
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="БД недоступна")
+    user = get_user_by_email(conn, email=body.email.strip().lower())
+    if user is None or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Неверный email или пароль")
+    return AuthResponse(access_token=create_access_token(user["id"]))
+
+
+@app.get(
+    "/api/auth/me",
+    tags=["Auth"],
+    summary="Данные текущего пользователя",
+    response_model=UserInfo,
+)
+def auth_me(current_user: dict = Depends(get_current_user)):
+    return UserInfo(**current_user)
+
+
 @app.post(
     "/api/router",
     tags=["Роутер"],
@@ -232,7 +285,7 @@ def health():
     response_model=RouterResponse,
     response_description="Результат сопоставления запроса с таксономией",
 )
-def router_query(body: RouterRequest):
+def router_query(body: RouterRequest, current_user: dict = Depends(get_current_user)):
     """
     - **matched** — найден узел таксономии, возвращается `selection`
     - **not_found** — подходящий узел не определён
@@ -254,7 +307,7 @@ def router_query(body: RouterRequest):
     response_model=list[CollectionItem],
     response_description="Массив коллекций с метаданными",
 )
-def list_collections():
+def list_collections(current_user: dict = Depends(get_current_user)):
     """Возвращает все коллекции, созданные в системе, с метаданными таксономии и датами обновления."""
     from src.tools.db_state import get_connection, list_collections as _list
     conn = get_connection()
@@ -270,7 +323,7 @@ def list_collections():
     response_description="Метаданные коллекции",
     responses={404: {"description": "Коллекция не найдена"}},
 )
-def get_collection(collection_id: int):
+def get_collection(collection_id: int, current_user: dict = Depends(get_current_user)):
     from src.tools.db_state import get_connection, get_collection_by_id
     conn = get_connection()
     row = get_collection_by_id(conn, collection_id)
@@ -287,7 +340,7 @@ def get_collection(collection_id: int):
     response_description="Массив статей с заголовками, аннотациями и ссылками",
     responses={404: {"description": "Коллекция не найдена"}},
 )
-def list_collection_articles(collection_id: int):
+def list_collection_articles(collection_id: int, current_user: dict = Depends(get_current_user)):
     from src.tools.db_state import get_connection, get_collection_by_id, get_articles_for_collection
     conn = get_connection()
     if not get_collection_by_id(conn, collection_id):
@@ -301,7 +354,7 @@ def list_collection_articles(collection_id: int):
     tags=["RSS"],
     summary="Статус автообновления лент",
 )
-def rss_status():
+def rss_status(current_user: dict = Depends(get_current_user)):
     """Возвращает когда последний раз запускался сбор и когда следующий."""
     last = _scheduler_state["last_run_at"]
     nxt = _scheduler_state["next_run_at"]
@@ -321,7 +374,7 @@ def rss_status():
     response_model=RssCollectResponse,
     response_description="Статистика сбора: новые статьи, дубли, время выполнения",
 )
-def rss_collect_endpoint(body: RssCollectRequest):
+def rss_collect_endpoint(body: RssCollectRequest, current_user: dict = Depends(get_current_user)):
     """
     Обходит все настроенные RSS-ленты и сохраняет **только новые** статьи в `processed_articles`.
 
@@ -378,7 +431,7 @@ def rss_collect_endpoint(body: RssCollectRequest):
     response_model=PipelineRunResponse,
     response_description="Результат выполнения: количество обработанных статей",
 )
-def run_pipeline_endpoint(body: PipelineRunRequest):
+def run_pipeline_endpoint(body: PipelineRunRequest, current_user: dict = Depends(get_current_user)):
     try:
         from src.main import run_pipeline
         df = run_pipeline(
@@ -403,7 +456,7 @@ def run_pipeline_endpoint(body: PipelineRunRequest):
     response_model=QAResponse,
     response_description="Ответ LLM с указанием источников",
 )
-def qa_ask(body: QARequest):
+def qa_ask(body: QARequest, current_user: dict = Depends(get_current_user)):
     """
     Выполняет RAG-запрос к коллекции:
 
@@ -451,7 +504,7 @@ def qa_ask(body: QARequest):
     tags=["Коллекции"],
     summary="Диапазон дат статей в коллекции",
 )
-def get_collection_date_range(collection_id: int):
+def get_collection_date_range(collection_id: int, current_user: dict = Depends(get_current_user)):
     """Возвращает min/max published_at статей в коллекции для ограничения date picker."""
     from src.tools.db_state import get_connection
     from config.config import POSTGRES_TABLE_RAG_DOCUMENTS
@@ -483,6 +536,7 @@ def get_digest(
     collection_id: int,
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
+    current_user: dict = Depends(get_current_user),
 ):
     """
     **Разделы дайджеста:** Тренды, Методы и подходы, Инструменты и технологии, Кейсы и примеры.
@@ -517,7 +571,7 @@ def get_digest(
     summary="Запустить BERTopic пайплайн асинхронно",
     response_model=BertopicRunResponse,
 )
-def bertopic_run(body: BertopicRunRequest):
+def bertopic_run(body: BertopicRunRequest, current_user: dict = Depends(get_current_user)):
     """
     Запускает полный BERTopic пайплайн в фоновом потоке.
     Возвращает task_id для отслеживания прогресса через GET /api/bertopic/status/{task_id}.
@@ -544,7 +598,7 @@ def bertopic_run(body: BertopicRunRequest):
     summary="Статус выполнения BERTopic пайплайна",
     response_model=BertopicStatusResponse,
 )
-def bertopic_status(task_id: str):
+def bertopic_status(task_id: str, current_user: dict = Depends(get_current_user)):
     """Возвращает прогресс (0.0–1.0) и статус задачи: pending | running | done | error."""
     from src.bertopic.pipeline import get_task
     task = get_task(task_id)
@@ -567,7 +621,7 @@ def bertopic_status(task_id: str):
     summary="Список тем (коллекций) BERTopic для карты",
     response_model=BertopicTopicsResponse,
 )
-def bertopic_topics():
+def bertopic_topics(current_user: dict = Depends(get_current_user)):
     """
     Возвращает все BERTopic-темы с количеством статей и ключевыми словами.
     Используется фронтендом для построения пузырьковой карты.
@@ -603,7 +657,7 @@ def bertopic_topics():
     tags=["BERTopic"],
     summary="Статьи BERTopic-коллекции (через assignments)",
 )
-def bertopic_collection_articles(collection_id: int):
+def bertopic_collection_articles(collection_id: int, current_user: dict = Depends(get_current_user)):
     """
     Загружает статьи темы через bertopic_assignments → processed_articles.
     Работает даже если skip_rag=True (rag_documents пустые).
@@ -628,7 +682,7 @@ def bertopic_collection_articles(collection_id: int):
     summary="QA по статьям из лент (без RAG)",
     response_model=FeedQAResponse,
 )
-def feed_qa(body: FeedQARequest):
+def feed_qa(body: FeedQARequest, current_user: dict = Depends(get_current_user)):
     """QA по статьям пользователя из указанных лент. Не требует предварительной индексации."""
     try:
         from src.qa.feed_qa import FeedQAOptions, answer_question_by_feeds
@@ -664,7 +718,7 @@ def feed_qa(body: FeedQARequest):
     tags=["Дайджест"],
     summary="Дайджест по статьям из лент (без RAG)",
 )
-def feed_digest(body: FeedDigestRequest):
+def feed_digest(body: FeedDigestRequest, current_user: dict = Depends(get_current_user)):
     """Дайджест по статьям из указанных лент за период. Не требует предварительной индексации."""
     try:
         from src.digest.feed_digest import FeedDigestOptions, build_digest_by_feeds
@@ -694,7 +748,7 @@ def feed_digest(body: FeedDigestRequest):
     summary="Проверить RSS-ленту по URL",
     response_model=FeedValidateResponse,
 )
-def validate_feed(body: FeedValidateRequest):
+def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_current_user)):
     """
     Проверяет URL до сохранения: делает GET-запрос и парсит как RSS/Atom.
     Возвращает название и favicon если лента валидна, иначе — ошибку.
@@ -735,7 +789,7 @@ def validate_feed(body: FeedValidateRequest):
     response_model=FeedItem,
     status_code=201,
 )
-def add_feed(body: FeedCreate):
+def add_feed(body: FeedCreate, current_user: dict = Depends(get_current_user)):
     """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует."""
     from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds
     conn = get_connection()
@@ -754,7 +808,7 @@ def add_feed(body: FeedCreate):
     summary="Список подписок пользователя",
     response_model=list[FeedItem],
 )
-def get_feeds(include_hidden: bool = False):
+def get_feeds(include_hidden: bool = False, current_user: dict = Depends(get_current_user)):
     """Возвращает все ленты на которые подписан пользователь. Используется для отрисовки боковой панели."""
     from src.tools.db_state import get_connection, list_feeds
     conn = get_connection()
@@ -768,7 +822,7 @@ def get_feeds(include_hidden: bool = False):
     response_model=FeedItem,
     responses={404: {"description": "Подписка не найдена"}},
 )
-def get_feed(feed_id: int):
+def get_feed(feed_id: int, current_user: dict = Depends(get_current_user)):
     """Возвращает данные одной ленты пользователя: название, favicon, unread_count и т.д. 404 если пользователь не подписан на эту ленту."""
     from src.tools.db_state import get_connection, get_user_feed_by_id
     conn = get_connection()
@@ -785,7 +839,7 @@ def get_feed(feed_id: int):
     status_code=204,
     responses={404: {"description": "Подписка не найдена"}},
 )
-def remove_feed(feed_id: int):
+def remove_feed(feed_id: int, current_user: dict = Depends(get_current_user)):
     """Удаляет подписку пользователя на ленту. Саму ленту не удаляет."""
     from src.tools.db_state import get_connection, delete_feed
     conn = get_connection()
@@ -800,7 +854,7 @@ def remove_feed(feed_id: int):
     response_model=FeedItem,
     responses={404: {"description": "Подписка не найдена"}},
 )
-def patch_feed(feed_id: int, body: FeedUpdate):
+def patch_feed(feed_id: int, body: FeedUpdate, current_user: dict = Depends(get_current_user)):
     """Обновляет название, статус (включена/выключена) или папку ленты."""
     from src.tools.db_state import get_connection, update_feed
     conn = get_connection()
@@ -821,7 +875,7 @@ def patch_feed(feed_id: int, body: FeedUpdate):
     response_model=list[ArticleItem],
     responses={404: {"description": "Лента не найдена"}},
 )
-def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False):
+def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False, current_user: dict = Depends(get_current_user)):
     """
     Возвращает статьи ленты с пагинацией (30 статей на страницу), новые первые.
     unread_only=true — только непрочитанные статьи.
@@ -844,7 +898,7 @@ def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False):
     response_model=FolderItem,
     status_code=201,
 )
-def create_folder_endpoint(body: FolderCreate):
+def create_folder_endpoint(body: FolderCreate, current_user: dict = Depends(get_current_user)):
     """Создаёт папку в боковой панели пользователя."""
     from src.tools.db_state import get_connection, create_folder
     conn = get_connection()
@@ -858,7 +912,7 @@ def create_folder_endpoint(body: FolderCreate):
     summary="Список папок",
     response_model=list[FolderItem],
 )
-def get_folders():
+def get_folders(current_user: dict = Depends(get_current_user)):
     """Возвращает все папки пользователя, отсортированные по позиции."""
     from src.tools.db_state import get_connection, list_folders
     conn = get_connection()
@@ -872,7 +926,7 @@ def get_folders():
     response_model=FolderItem,
     responses={404: {"description": "Папка не найдена"}},
 )
-def patch_folder(folder_id: int, body: FolderUpdate):
+def patch_folder(folder_id: int, body: FolderUpdate, current_user: dict = Depends(get_current_user)):
     """Обновляет название или позицию папки."""
     from src.tools.db_state import get_connection, update_folder
     conn = get_connection()
@@ -889,7 +943,7 @@ def patch_folder(folder_id: int, body: FolderUpdate):
     status_code=204,
     responses={404: {"description": "Папка не найдена"}},
 )
-def delete_folder_endpoint(folder_id: int):
+def delete_folder_endpoint(folder_id: int, current_user: dict = Depends(get_current_user)):
     """Удаляет папку. Ленты внутри перемещаются в корень боковой панели."""
     from src.tools.db_state import get_connection, delete_folder
     conn = get_connection()
@@ -908,7 +962,7 @@ def delete_folder_endpoint(folder_id: int):
     response_model=list[CatalogFeedItem],
     response_description="Все системные ленты со статистикой и флагом подписки",
 )
-def get_catalog():
+def get_catalog(current_user: dict = Depends(get_current_user)):
     """
     Возвращает все ленты каталога (из config.RSS_FEEDS) со статистикой:
     кол-во подписчиков, постов в день, последняя статья.
@@ -932,7 +986,7 @@ def get_catalog():
     tags=["Каталог"],
     summary="Сгенерировать описания для лент каталога без описания",
 )
-def generate_catalog_descriptions():
+def generate_catalog_descriptions(current_user: dict = Depends(get_current_user)):
     """
     Одноразовый эндпоинт: берёт все ленты каталога где description IS NULL,
     скачивает RSS, берёт до 10 заголовков статей, батчами по 10 отправляет в GigaChat
@@ -995,7 +1049,7 @@ def generate_catalog_descriptions():
     response_model=list[ArticleItem],
     response_description="Все статьи из всех активных лент пользователя",
 )
-def get_all_articles(page: int = 1):
+def get_all_articles(page: int = 1, current_user: dict = Depends(get_current_user)):
     """Возвращает все статьи из подписок пользователя, новые первые. Скрытые ленты исключены."""
     from src.tools.db_state import get_connection, list_all_articles
     conn = get_connection()
@@ -1009,7 +1063,7 @@ def get_all_articles(page: int = 1):
     response_model=list[ArticleItem],
     response_description="Все непрочитанные статьи из подписок пользователя",
 )
-def get_unread_articles(page: int = 1):
+def get_unread_articles(page: int = 1, current_user: dict = Depends(get_current_user)):
     """Возвращает непрочитанные статьи из всех активных лент пользователя, новые первые."""
     from src.tools.db_state import get_connection, list_unread_articles
     conn = get_connection()
@@ -1023,7 +1077,7 @@ def get_unread_articles(page: int = 1):
     response_model=list[ArticleItem],
     response_description="Статьи опубликованные сегодня из подписок пользователя",
 )
-def get_today_articles():
+def get_today_articles(current_user: dict = Depends(get_current_user)):
     """Возвращает все статьи из лент пользователя опубликованные сегодня, новые первые."""
     from src.tools.db_state import get_connection, list_today_articles
     conn = get_connection()
@@ -1036,7 +1090,7 @@ def get_today_articles():
     summary="Статьи из нескольких лент",
     response_model=list[ArticleItem],
 )
-def get_articles_by_feeds(feed_ids: str, page: int = 1):
+def get_articles_by_feeds(feed_ids: str, page: int = 1, current_user: dict = Depends(get_current_user)):
     """
     Возвращает объединённый список статей из нескольких лент, отсортированный по дате.
     feed_ids — через запятую: ?feed_ids=1,2,3
@@ -1059,7 +1113,7 @@ def get_articles_by_feeds(feed_ids: str, page: int = 1):
     summary="Поиск статей по заголовку и summary",
     response_model=list[ArticleItem],
 )
-def search_articles_endpoint(q: str, limit: int = 20):
+def search_articles_endpoint(q: str, limit: int = 20, current_user: dict = Depends(get_current_user)):
     """Полнотекстовый поиск (ILIKE) по title, ai_summary, summary. Только ленты пользователя."""
     if not q or len(q.strip()) < 2:
         return []
@@ -1075,7 +1129,7 @@ def search_articles_endpoint(q: str, limit: int = 20):
     response_model=ArticleDetail,
     responses={404: {"description": "Статья не найдена"}},
 )
-def get_article(article_id: int):
+def get_article(article_id: int, current_user: dict = Depends(get_current_user)):
     """
     Возвращает полные данные статьи включая full_text.
     Если full_text отсутствует в БД — извлекает с оригинального сайта и сохраняет.
@@ -1107,7 +1161,7 @@ def get_article(article_id: int):
     response_model=SummarizeResponse,
     responses={404: {"description": "Статья не найдена"}},
 )
-def summarize_article_endpoint(article_id: int, force: bool = False):
+def summarize_article_endpoint(article_id: int, force: bool = False, current_user: dict = Depends(get_current_user)):
     """
     Генерирует краткое AI-резюме статьи (3–4 предложения).
 
@@ -1184,7 +1238,7 @@ def summarize_article_endpoint(article_id: int, force: bool = False):
     tags=["Статьи"],
     summary="Перевод статьи EN → RU",
 )
-def translate_article_endpoint(article_id: int):
+def translate_article_endpoint(article_id: int, current_user: dict = Depends(get_current_user)):
     """
     Переводит title, summary и full_text статьи с EN на RU.
     Использует Helsinki-NLP/opus-mt-en-ru (MarianMT), локально.
@@ -1212,7 +1266,7 @@ def translate_article_endpoint(article_id: int):
     summary="Пометить статью прочитанной",
     response_description="Подтверждение записи факта прочтения",
 )
-def mark_read(body: ArticleReadRequest):
+def mark_read(body: ArticleReadRequest, current_user: dict = Depends(get_current_user)):
     """Записывает факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, mark_article_read
     conn = get_connection()
@@ -1226,7 +1280,7 @@ def mark_read(body: ArticleReadRequest):
     summary="Снять метку прочитанного",
     response_description="Подтверждение снятия метки",
 )
-def mark_unread(body: ArticleReadRequest):
+def mark_unread(body: ArticleReadRequest, current_user: dict = Depends(get_current_user)):
     """Удаляет факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, mark_article_unread
     conn = get_connection()
@@ -1239,7 +1293,7 @@ def mark_unread(body: ArticleReadRequest):
     tags=["Статьи"],
     summary="Добавить статью в закладки",
 )
-def add_bookmark(body: BookmarkRequest):
+def add_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_current_user)):
     """Добавляет статью в закладки. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, add_bookmark as _add_bookmark
     _add_bookmark(get_connection(), link=body.link)
@@ -1251,7 +1305,7 @@ def add_bookmark(body: BookmarkRequest):
     tags=["Статьи"],
     summary="Убрать статью из закладок",
 )
-def remove_bookmark(body: BookmarkRequest):
+def remove_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_current_user)):
     """Удаляет статью из закладок."""
     from src.tools.db_state import get_connection, remove_bookmark as _remove_bookmark
     _remove_bookmark(get_connection(), link=body.link)
@@ -1264,7 +1318,7 @@ def remove_bookmark(body: BookmarkRequest):
     summary="Закладки пользователя",
     response_model=list[ArticleItem],
 )
-def get_bookmarks(page: int = 1):
+def get_bookmarks(page: int = 1, current_user: dict = Depends(get_current_user)):
     """Возвращает закладки пользователя, отсортированные по дате сохранения (новые первые)."""
     from src.tools.db_state import get_connection, list_bookmarks
     rows = list_bookmarks(get_connection(), page=page)
@@ -1278,7 +1332,7 @@ def get_bookmarks(page: int = 1):
     response_description="Количество помеченных статей",
     responses={404: {"description": "Лента не найдена"}},
 )
-def mark_feed_read_all(feed_id: int):
+def mark_feed_read_all(feed_id: int, current_user: dict = Depends(get_current_user)):
     """Помечает все статьи ленты прочитанными. Повторный вызов безопасен."""
     from src.tools.db_state import get_connection, get_feed_by_id, mark_feed_all_read
     conn = get_connection()

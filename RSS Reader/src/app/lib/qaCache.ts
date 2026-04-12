@@ -41,5 +41,5 @@ export const qaCache = {
     cache.set(key, existing);
   },
   has: (key: string): boolean => cache.has(key),
-  clear: (key: string): void => { cache.delete(key); },
+  clear: (key?: string): void => { key ? cache.delete(key) : cache.clear(); },
 };
