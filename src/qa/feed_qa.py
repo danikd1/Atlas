@@ -64,19 +64,25 @@ def answer_question_by_feeds(
     query: str,
     feed_ids: List[int],
     options: Optional[FeedQAOptions] = None,
+    collection_id: Optional[int] = None,
 ) -> FeedQAResult:
-    """QA по статьям из заданных лент без RAG."""
+    """QA по статьям из заданных лент без RAG. Если задан collection_id — использует статьи коллекции."""
     if options is None:
         options = FeedQAOptions()
 
     conn = get_connection()
-    rows = get_articles_by_feed_ids(
-        conn,
-        feed_ids,
-        from_date=options.from_date,
-        to_date=options.to_date,
-        limit=200,
-    )
+
+    if collection_id is not None:
+        from src.tools.db_state import get_articles_for_bertopic_collection
+        rows = get_articles_for_bertopic_collection(conn, collection_id, from_date=options.from_date, to_date=options.to_date)
+    else:
+        rows = get_articles_by_feed_ids(
+            conn,
+            feed_ids,
+            from_date=options.from_date,
+            to_date=options.to_date,
+            limit=200,
+        )
 
     if not rows:
         return FeedQAResult(

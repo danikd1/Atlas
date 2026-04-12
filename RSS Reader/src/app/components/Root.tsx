@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate } from "react-router";
-import { Newspaper, Rss, Home, Search, X } from "lucide-react";
+import { Newspaper, Rss, Home, Search, X, Map } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -214,6 +214,17 @@ export function Root() {
               >
                 <Rss className="w-4 h-4" />
                 Мои Источники
+              </Link>
+              <Link
+                to="/map"
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                  location.pathname === "/map"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-700 hover:bg-gray-100"
+                }`}
+              >
+                <Map className="w-4 h-4" />
+                Карта
               </Link>
             </nav>
           </div>

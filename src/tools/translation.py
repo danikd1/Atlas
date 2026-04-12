@@ -25,7 +25,7 @@ def _get_translator():
     return _model, _tokenizer
 
 
-def _split_into_chunks(text: str, max_words: int = 400) -> list[str]:
+def _split_into_chunks(text: str, max_words: int = 200) -> list[str]:
     """Разбивает текст на чанки по границам предложений, не превышая max_words слов."""
     # Разбиваем на предложения
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
@@ -49,6 +49,20 @@ def _split_into_chunks(text: str, max_words: int = 400) -> list[str]:
     return chunks or [text]
 
 
+def _is_garbage(text: str) -> bool:
+    """Проверяет что перевод не является мусором (повторяющиеся токены)."""
+    if len(text) < 10:
+        return False
+    # Берём первые 100 символов и проверяем на повторяющиеся паттерны
+    sample = text[:200].upper()
+    words = sample.split()
+    if len(words) < 4:
+        return False
+    # Если больше 40% слов повторяются — мусор
+    unique = len(set(words))
+    return unique / len(words) < 0.4
+
+
 def _translate_chunk(text: str, model, tokenizer) -> str:
     """Переводит один чанк текста."""
     inputs = tokenizer(
@@ -58,8 +72,18 @@ def _translate_chunk(text: str, model, tokenizer) -> str:
         truncation=True,
         max_length=512,
     )
-    translated = model.generate(**inputs, num_beams=4)
-    return tokenizer.decode(translated[0], skip_special_tokens=True)
+    translated = model.generate(
+        **inputs,
+        num_beams=4,
+        repetition_penalty=3.0,
+        no_repeat_ngram_size=4,
+        max_new_tokens=512,
+    )
+    result = tokenizer.decode(translated[0], skip_special_tokens=True)
+    # Если получился мусор — возвращаем оригинал
+    if _is_garbage(result):
+        return text
+    return result
 
 
 def translate_text(text: str) -> str:

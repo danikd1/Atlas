@@ -413,7 +413,8 @@ class CatalogFeedItem(BaseModel):
 
 class FeedQARequest(BaseModel):
     """Запрос QA по статьям из лент (без RAG-коллекций)."""
-    feed_ids: List[int] = Field(..., min_length=1, description="ID лент пользователя.")
+    feed_ids: List[int] = Field(default=[], description="ID лент пользователя.")
+    collection_id: Optional[int] = Field(default=None, description="ID BERTopic-коллекции (приоритет над feed_ids).")
     question: str = Field(..., min_length=1, description="Вопрос пользователя.")
     from_date: Optional[datetime] = Field(default=None, description="Начало периода (ISO 8601).")
     to_date: Optional[datetime] = Field(default=None, description="Конец периода (ISO 8601).")
@@ -447,7 +448,8 @@ class FeedQAResponse(BaseModel):
 
 class FeedDigestRequest(BaseModel):
     """Запрос дайджеста по статьям из лент."""
-    feed_ids: List[int] = Field(..., min_length=1, description="ID лент пользователя.")
+    feed_ids: List[int] = Field(default=[], description="ID лент пользователя.")
+    collection_id: Optional[int] = Field(default=None, description="ID BERTopic-коллекции (приоритет над feed_ids).")
     from_date: Optional[datetime] = Field(default=None, description="Начало периода.")
     to_date: Optional[datetime] = Field(default=None, description="Конец периода.")
 
@@ -467,3 +469,46 @@ def serialize_digest_section_item(obj: Any) -> Any:
     if isinstance(obj, list):
         return [serialize_digest_section_item(x) for x in obj]
     return obj
+
+
+# ── BERTopic API ───────────────────────────────────────────────────────────
+
+class BertopicRunRequest(BaseModel):
+    min_topic_size: int = Field(default=5, ge=2, description="Минимальный размер темы (статей).")
+    n_categories: int = Field(default=10, ge=2, description="Количество мета-категорий KMeans.")
+    skip_rag: bool = Field(default=True, description="Пропустить генерацию RAG-чанков (быстрее).")
+    source_filter: Optional[str] = Field(default=None, description="Фильтр по источнику (ILIKE).")
+    limit: Optional[int] = Field(default=None, ge=100, description="Лимит статей (по умолчанию все).")
+    days_back: Optional[int] = Field(default=None, ge=1, description="Статьи за последние N дней (None = все).")
+
+
+class BertopicRunResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+
+class BertopicStatusResponse(BaseModel):
+    task_id: str
+    status: str          # pending | running | done | error
+    progress: float      # 0.0 – 1.0
+    message: str
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    started_at: Optional[str] = None
+
+
+class BertopicTopicItem(BaseModel):
+    id: int                          # collection.id
+    name: str
+    description: Optional[str] = None
+    keywords: Optional[str] = None   # "word1, word2, word3, ..."
+    bertopic_topic_id: Optional[int] = None
+    article_count: int
+    model_version: Optional[str] = None
+
+
+class BertopicTopicsResponse(BaseModel):
+    topics: List[BertopicTopicItem]
+    total: int
+

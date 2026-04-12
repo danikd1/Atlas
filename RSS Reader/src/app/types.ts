@@ -64,11 +64,18 @@ export type ArticleSource =
       feedIds?: number[]; // для мульти-лентных источников: все id лент
       title: string;
       favicon_url?: string;
+    }
+  | {
+      kind: "topic";
+      collectionId: number;  // collections.id
+      title: string;
+      keywords?: string;
     };
 
 export function sourceKey(source: ArticleSource | null): string | null {
   if (!source) return null;
   if (source.kind === "feed") return `feed:${source.feedId}`;
+  if (source.kind === "topic") return `topic:${source.collectionId}`;
   return source.kind;
 }
 

@@ -99,15 +99,16 @@ def _articles_from_cluster(
 def build_digest_by_feeds(
     feed_ids: List[int],
     options: Optional[FeedDigestOptions] = None,
+    collection_id: Optional[int] = None,
 ) -> FeedDigestResult:
-    """Собирает дайджест по статьям из заданных лент."""
+    """Собирает дайджест по статьям из заданных лент. Если задан collection_id — использует статьи коллекции."""
     if options is None:
         options = FeedDigestOptions()
 
     # Дефолтный период — последние 7 дней, если не задан
     from_date = options.from_date
     to_date = options.to_date
-    if from_date is None and to_date is None:
+    if from_date is None and to_date is None and collection_id is None:
         to_date = datetime.utcnow()
         from_date = to_date - timedelta(days=7)
 
@@ -122,7 +123,11 @@ def build_digest_by_feeds(
     )
 
     conn = get_connection()
-    rows = get_articles_by_feed_ids(conn, feed_ids, from_date=from_date, to_date=to_date, limit=300)
+    if collection_id is not None:
+        from src.tools.db_state import get_articles_for_bertopic_collection
+        rows = get_articles_for_bertopic_collection(conn, collection_id, from_date=from_date, to_date=to_date, limit=300)
+    else:
+        rows = get_articles_by_feed_ids(conn, feed_ids, from_date=from_date, to_date=to_date, limit=300)
 
     if not rows:
         return empty_result

@@ -270,7 +270,7 @@ def ensure_tables(conn) -> None:
 
 
         # Миграция: новые колонки в collections для BERTopic
-        for col_def in ("bertopic_topic_id INT", "model_version TEXT"):
+        for col_def in ("bertopic_topic_id INT", "model_version TEXT", "keywords TEXT"):
             try:
                 cur.execute(
                     f"""
@@ -780,15 +780,36 @@ def load_articles_for_window(conn, hours_back: int):
     return pd.DataFrame(records)
 
 
-def get_or_create_bertopic_collection(
+def delete_bertopic_collections(conn) -> int:
+    """Удаляет все BERTopic-коллекции (bertopic_topic_id IS NOT NULL). Возвращает кол-во удалённых."""
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {POSTGRES_TABLE_COLLECTIONS} WHERE bertopic_topic_id IS NOT NULL;"
+        )
+        return cur.rowcount
+
+
+def delete_bertopic_assignments(conn) -> int:
+    """Удаляет все записи bertopic_assignments. Возвращает кол-во удалённых."""
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS};")
+        return cur.rowcount
+
+
+def create_bertopic_collection(
     conn,
     topic_id: int,
     topic_name: str,
     model_version: str,
     description: Optional[str] = None,
+    keywords: Optional[str] = None,
 ) -> Optional[CollectionRow]:
     """
-    Находит или создаёт коллекцию для BERTopic-темы.
+    Создаёт новую коллекцию для BERTopic-темы (без поиска существующей).
 
     collection_key = "bertopic_topic_{topic_id}"
     discipline/ga/activity = NULL
@@ -799,41 +820,16 @@ def get_or_create_bertopic_collection(
     with conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, name, description, discipline, ga, activity, collection_key,
-                   user_id, team_id, created_at, updated_at, last_refreshed_at
-            FROM {POSTGRES_TABLE_COLLECTIONS}
-            WHERE collection_key = %s AND name = %s;
+            INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
+                (name, description, keywords, discipline, ga, activity, collection_key,
+                 bertopic_topic_id, model_version, updated_at, last_refreshed_at)
+            VALUES (%s, %s, %s, NULL, NULL, NULL, %s, %s, %s, NOW(), NOW())
+            RETURNING id, name, description, keywords, discipline, ga, activity, collection_key,
+                      user_id, team_id, created_at, updated_at, last_refreshed_at;
             """,
-            (key, topic_name),
+            (topic_name, description, keywords, key, topic_id, model_version),
         )
         row = cur.fetchone()
-        if row:
-            cur.execute(
-                f"""
-                UPDATE {POSTGRES_TABLE_COLLECTIONS}
-                SET last_refreshed_at = NOW(), updated_at = NOW(),
-                    bertopic_topic_id = %s, model_version = %s,
-                    description = COALESCE(%s, description)
-                WHERE id = %s
-                RETURNING id, name, description, discipline, ga, activity, collection_key,
-                          user_id, team_id, created_at, updated_at, last_refreshed_at;
-                """,
-                (topic_id, model_version, description, row["id"]),
-            )
-            row = cur.fetchone()
-        else:
-            cur.execute(
-                f"""
-                INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
-                    (name, description, discipline, ga, activity, collection_key,
-                     bertopic_topic_id, model_version, updated_at, last_refreshed_at)
-                VALUES (%s, %s, NULL, NULL, NULL, %s, %s, %s, NOW(), NOW())
-                RETURNING id, name, description, discipline, ga, activity, collection_key,
-                          user_id, team_id, created_at, updated_at, last_refreshed_at;
-                """,
-                (topic_name, description, key, topic_id, model_version),
-            )
-            row = cur.fetchone()
     if not row:
         return None
     return dict(row)
@@ -1987,5 +1983,88 @@ def search_articles(conn, query: str, user_id: int = 0, limit: int = 20) -> list
             LIMIT %s;
             """,
             (user_id, user_id, user_id, pattern, pattern, pattern, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_articles_for_bertopic_collection(
+    conn,
+    collection_id: int,
+    from_date=None,
+    to_date=None,
+    limit: int = 200,
+) -> List[Dict]:
+    """
+    Возвращает статьи BERTopic-коллекции через bertopic_assignments + processed_articles.
+    Опционально фильтрует по дате публикации.
+    """
+    if conn is None:
+        return []
+
+    conditions = ["c.id = %s"]
+    params: list = [collection_id]
+
+    if from_date is not None:
+        conditions.append("pa.published_at >= %s")
+        params.append(from_date)
+    if to_date is not None:
+        conditions.append("pa.published_at <= %s")
+        params.append(to_date)
+
+    where = " AND ".join(conditions)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                pa.id,
+                pa.link,
+                pa.title,
+                pa.summary,
+                pa.source,
+                pa.published_at,
+                pa.feed_id,
+                (ar.link IS NOT NULL) AS is_read,
+                (ab.link IS NOT NULL) AS is_saved
+            FROM {POSTGRES_TABLE_COLLECTIONS} c
+            JOIN {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} ba ON ba.topic_id = c.bertopic_topic_id
+            JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = ba.link
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = 0
+            LEFT JOIN article_bookmarks ab ON ab.link = pa.link AND ab.user_id = 0
+            WHERE {where}
+            ORDER BY pa.published_at DESC NULLS LAST
+            LIMIT {limit};
+            """,
+            params,
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_bertopic_topics(conn) -> List[Dict]:
+    """
+    Возвращает список BERTopic-тем (коллекций) с количеством статей.
+    Используется для построения пузырьковой карты.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.keywords,
+                c.bertopic_topic_id,
+                c.model_version,
+                c.created_at,
+                COUNT(ba.link) AS article_count
+            FROM {POSTGRES_TABLE_COLLECTIONS} c
+            LEFT JOIN {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} ba
+                ON ba.topic_id = c.bertopic_topic_id
+            WHERE c.bertopic_topic_id IS NOT NULL
+            GROUP BY c.id
+            ORDER BY article_count DESC;
+            """
         )
         return [dict(row) for row in cur.fetchall()]

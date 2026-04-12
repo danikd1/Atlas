@@ -323,6 +323,7 @@ export const api = {
 
   async feedQA(params: {
     feed_ids: number[];
+    collection_id?: number;
     question: string;
     from_date?: string;
     to_date?: string;
@@ -343,8 +344,83 @@ export const api = {
     return res.json();
   },
 
+  async getCollectionArticles(collectionId: number, _page = 1): Promise<ApiArticleItem[]> {
+    // Используем BERTopic-эндпоинт: статьи через assignments → processed_articles
+    const res = await fetch(`${API_BASE}/api/bertopic/collections/${collectionId}/articles`);
+    if (!res.ok) throw new Error("Не удалось загрузить статьи коллекции");
+    const data = await res.json();
+    return (Array.isArray(data) ? data : []).map((a: any) => ({
+      id: a.id ?? 0,
+      link: a.link ?? "",
+      title: a.title ?? null,
+      summary: a.summary ?? null,
+      published_at: a.published_at ?? null,
+      source: a.source ?? null,
+      feed_id: a.feed_id ?? null,
+      is_read: a.is_read ?? false,
+      is_saved: a.is_saved ?? false,
+    }));
+  },
+
+  // ── BERTopic ──────────────────────────────────────────────────────────────
+
+  async bertopicRun(params?: {
+    min_topic_size?: number;
+    n_categories?: number;
+    skip_rag?: boolean;
+    source_filter?: string;
+    limit?: number;
+    days_back?: number;
+  }): Promise<{ task_id: string; status: string; message: string }> {
+    const res = await fetch(`${API_BASE}/api/bertopic/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params ?? {}),
+    });
+    if (!res.ok) throw new Error("Ошибка запуска BERTopic");
+    return res.json();
+  },
+
+  async bertopicStatus(taskId: string): Promise<{
+    task_id: string;
+    status: string;
+    progress: number;
+    message: string;
+    error?: string;
+    result?: {
+      n_topics: number;
+      n_articles: number;
+      n_collections: number;
+      n_assignments: number;
+      model_version: string;
+    };
+    started_at?: string;
+  }> {
+    const res = await fetch(`${API_BASE}/api/bertopic/status/${taskId}`);
+    if (!res.ok) throw new Error("Задача не найдена");
+    return res.json();
+  },
+
+  async bertopicTopics(): Promise<{
+    topics: {
+      id: number;
+      name: string;
+      description?: string;
+      keywords?: string;
+      bertopic_topic_id?: number;
+      article_count: number;
+      model_version?: string;
+    }[];
+    total: number;
+  }> {
+    const res = await fetch(`${API_BASE}/api/bertopic/topics`);
+    if (!res.ok) throw new Error("Ошибка загрузки тем");
+    return res.json();
+  },
+
   async feedDigest(params: {
     feed_ids: number[];
+    collection_id?: number;
     from_date?: string;
     to_date?: string;
   }): Promise<{

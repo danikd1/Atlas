@@ -53,6 +53,11 @@ from .schemas import (
     RssCollectRequest,
     RssCollectResponse,
     serialize_digest_section_item,
+    BertopicRunRequest,
+    BertopicRunResponse,
+    BertopicStatusResponse,
+    BertopicTopicItem,
+    BertopicTopicsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -504,6 +509,119 @@ def get_digest(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── BERTopic ─────────────────────────────────────────────────────────────────
+
+@app.post(
+    "/api/bertopic/run",
+    tags=["BERTopic"],
+    summary="Запустить BERTopic пайплайн асинхронно",
+    response_model=BertopicRunResponse,
+)
+def bertopic_run(body: BertopicRunRequest):
+    """
+    Запускает полный BERTopic пайплайн в фоновом потоке.
+    Возвращает task_id для отслеживания прогресса через GET /api/bertopic/status/{task_id}.
+    """
+    from src.bertopic.pipeline import run_async
+    task_id = run_async(
+        min_topic_size=body.min_topic_size,
+        n_categories=body.n_categories,
+        skip_rag=body.skip_rag,
+        source_filter=body.source_filter,
+        limit=body.limit,
+        days_back=body.days_back,
+    )
+    return BertopicRunResponse(
+        task_id=task_id,
+        status="pending",
+        message="Пайплайн запущен",
+    )
+
+
+@app.get(
+    "/api/bertopic/status/{task_id}",
+    tags=["BERTopic"],
+    summary="Статус выполнения BERTopic пайплайна",
+    response_model=BertopicStatusResponse,
+)
+def bertopic_status(task_id: str):
+    """Возвращает прогресс (0.0–1.0) и статус задачи: pending | running | done | error."""
+    from src.bertopic.pipeline import get_task
+    task = get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Задача {task_id} не найдена")
+    return BertopicStatusResponse(
+        task_id=task_id,
+        status=task["status"],
+        progress=task["progress"],
+        message=task["message"],
+        error=task.get("error"),
+        result=task.get("result"),
+        started_at=task.get("started_at"),
+    )
+
+
+@app.get(
+    "/api/bertopic/topics",
+    tags=["BERTopic"],
+    summary="Список тем (коллекций) BERTopic для карты",
+    response_model=BertopicTopicsResponse,
+)
+def bertopic_topics():
+    """
+    Возвращает все BERTopic-темы с количеством статей и ключевыми словами.
+    Используется фронтендом для построения пузырьковой карты.
+    """
+    from src.tools.db_state import get_connection, get_bertopic_topics
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Нет подключения к БД")
+    try:
+        rows = get_bertopic_topics(conn)
+        topics = [
+            BertopicTopicItem(
+                id=row["id"],
+                name=row["name"],
+                description=row.get("description"),
+                keywords=row.get("keywords"),
+                bertopic_topic_id=row.get("bertopic_topic_id"),
+                article_count=row.get("article_count") or 0,
+                model_version=row.get("model_version"),
+            )
+            for row in rows
+        ]
+        return BertopicTopicsResponse(topics=topics, total=len(topics))
+    except Exception as e:
+        logger.exception("BERTopic topics error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@app.get(
+    "/api/bertopic/collections/{collection_id}/articles",
+    tags=["BERTopic"],
+    summary="Статьи BERTopic-коллекции (через assignments)",
+)
+def bertopic_collection_articles(collection_id: int):
+    """
+    Загружает статьи темы через bertopic_assignments → processed_articles.
+    Работает даже если skip_rag=True (rag_documents пустые).
+    """
+    from src.tools.db_state import get_connection, get_articles_for_bertopic_collection
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Нет подключения к БД")
+    try:
+        rows = get_articles_for_bertopic_collection(conn, collection_id)
+        return rows
+    except Exception as e:
+        logger.exception("BERTopic collection articles error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 @app.post(
     "/api/feeds/qa",
     tags=["Q&A"],
@@ -519,7 +637,7 @@ def feed_qa(body: FeedQARequest):
             from_date=body.from_date,
             to_date=body.to_date,
         )
-        result = answer_question_by_feeds(body.question.strip(), body.feed_ids, opts)
+        result = answer_question_by_feeds(body.question.strip(), body.feed_ids, opts, collection_id=body.collection_id)
         return FeedQAResponse(
             status="ok",
             answer=result.answer,
@@ -551,7 +669,7 @@ def feed_digest(body: FeedDigestRequest):
     try:
         from src.digest.feed_digest import FeedDigestOptions, build_digest_by_feeds
         opts = FeedDigestOptions(from_date=body.from_date, to_date=body.to_date)
-        result = build_digest_by_feeds(body.feed_ids, opts)
+        result = build_digest_by_feeds(body.feed_ids, opts, collection_id=body.collection_id)
         return {
             "title": result.title,
             "feed_ids": result.feed_ids,

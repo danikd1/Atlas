@@ -6,6 +6,7 @@ import { qaCache, qaCacheKey, type QAHistoryItem, type QASource } from "../lib/q
 
 interface QAPanelProps {
   feedIds: number[];
+  collectionId?: number;
 }
 
 function formatDate(iso: string | null): string {
@@ -131,7 +132,7 @@ function HistoryItem({
   );
 }
 
-export function QAPanel({ feedIds }: QAPanelProps) {
+export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
   const navigate = useNavigate();
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -159,7 +160,7 @@ export function QAPanel({ feedIds }: QAPanelProps) {
     setError(null);
 
     try {
-      const result = await api.feedQA({ feed_ids: feedIds, question: q });
+      const result = await api.feedQA({ feed_ids: feedIds, collection_id: collectionId, question: q });
       if (result.status === "error") {
         setError(result.error || "Неизвестная ошибка");
       } else {

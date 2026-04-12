@@ -6,6 +6,7 @@ import { digestCache, digestCacheKey, type CachedDigest } from "../lib/digestCac
 
 interface DigestPanelProps {
   feedIds: number[];
+  collectionId?: number;
 }
 
 type Period = "day" | "week" | "month";
@@ -104,7 +105,7 @@ function SectionBlock({
   );
 }
 
-export function DigestPanel({ feedIds }: DigestPanelProps) {
+export function DigestPanel({ feedIds, collectionId }: DigestPanelProps) {
   const navigate = useNavigate();
   const [period, setPeriod] = useState<Period>("week");
   const [isLoading, setIsLoading] = useState(false);
@@ -155,7 +156,7 @@ export function DigestPanel({ feedIds }: DigestPanelProps) {
 
     try {
       const { from_date, to_date } = periodToDates(period);
-      const result = await api.feedDigest({ feed_ids: feedIds, from_date, to_date });
+      const result = await api.feedDigest({ feed_ids: feedIds, collection_id: collectionId, from_date, to_date });
       const data = result as CachedDigest;
       digestCache.set(key, data);
       setDigest(data);

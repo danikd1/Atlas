@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "react-router";
-import { X, Rss, Loader2, Calendar, BookOpen, Bookmark, FileText, CheckCheck, MessageSquare, BookText } from "lucide-react";
+import { X, Rss, Loader2, Calendar, BookOpen, Bookmark, FileText, CheckCheck, MessageSquare, BookText, Map } from "lucide-react";
 
 function Tooltip({ label, children, align = "center" }: { label: string; children: React.ReactNode; align?: "left" | "center" | "right" }) {
   const posClass =
@@ -50,10 +50,15 @@ function sourceTitle(source: ArticleSource): string {
       return "Все посты";
     case "feed":
       return source.title;
+    case "topic":
+      return source.title;
   }
 }
 
 function SourceIcon({ source }: { source: ArticleSource }) {
+  if (source.kind === "topic") {
+    return <Map className="w-4 h-4 text-blue-600 flex-shrink-0" />;
+  }
   if (source.kind === "feed") {
     return source.favicon_url ? (
       <img
@@ -102,6 +107,8 @@ async function fetchArticles(
         ? api.getArticlesByFeedIds(ids)
         : api.getFeedArticles(ids[0], page, false);
     }
+    case "topic":
+      return api.getCollectionArticles(source.collectionId, page);
   }
 }
 
@@ -234,6 +241,8 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
       ? (source.feedIds && source.feedIds.length > 0
           ? source.feedIds
           : [parseInt(source.feedId)])
+      : source.kind === "topic"
+      ? [...new Set(articles.map((a) => a.feed_id).filter((id): id is number => id !== null))]
       : [];
 
   const togglePanel = (panel: ActivePanel) =>
@@ -272,7 +281,7 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
             <span />
           )}
 
-          {source.kind === "feed" && (
+          {(source.kind === "feed" || source.kind === "topic") && (
             <div className="flex items-center gap-0.5">
               <Tooltip label="Спросить" align="right">
                 <button
@@ -307,11 +316,17 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
 
       {/* Список статей + QA/Digest */}
       <div className="flex-1 overflow-y-auto">
-        {activePanel === "qa" && feedIdsForPanel.length > 0 && (
-          <QAPanel feedIds={feedIdsForPanel} />
+        {activePanel === "qa" && (feedIdsForPanel.length > 0 || source.kind === "topic") && (
+          <QAPanel
+            feedIds={feedIdsForPanel}
+            collectionId={source.kind === "topic" ? source.collectionId : undefined}
+          />
         )}
-        {activePanel === "digest" && feedIdsForPanel.length > 0 && (
-          <DigestPanel feedIds={feedIdsForPanel} />
+        {activePanel === "digest" && (feedIdsForPanel.length > 0 || source.kind === "topic") && (
+          <DigestPanel
+            feedIds={feedIdsForPanel}
+            collectionId={source.kind === "topic" ? source.collectionId : undefined}
+          />
         )}
         {isLoading ? (
           <div className="flex items-center justify-center py-12 text-gray-400">
