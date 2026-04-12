@@ -17,7 +17,7 @@ from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -684,6 +684,12 @@ def bertopic_collection_articles(collection_id: int, current_user: dict = Depend
 )
 def feed_qa(body: FeedQARequest, current_user: dict = Depends(get_current_user)):
     """QA по статьям пользователя из указанных лент. Не требует предварительной индексации."""
+    from src.tools.db_state import get_connection, list_feeds
+    conn = get_connection()
+    user_feed_ids = {f["id"] for f in list_feeds(conn, user_id=current_user["id"])}
+    forbidden = [fid for fid in body.feed_ids if fid not in user_feed_ids]
+    if forbidden:
+        raise HTTPException(status_code=403, detail=f"Ленты не принадлежат пользователю: {forbidden}")
     try:
         from src.qa.feed_qa import FeedQAOptions, answer_question_by_feeds
         opts = FeedQAOptions(
@@ -720,6 +726,12 @@ def feed_qa(body: FeedQARequest, current_user: dict = Depends(get_current_user))
 )
 def feed_digest(body: FeedDigestRequest, current_user: dict = Depends(get_current_user)):
     """Дайджест по статьям из указанных лент за период. Не требует предварительной индексации."""
+    from src.tools.db_state import get_connection, list_feeds
+    conn = get_connection()
+    user_feed_ids = {f["id"] for f in list_feeds(conn, user_id=current_user["id"])}
+    forbidden = [fid for fid in body.feed_ids if fid not in user_feed_ids]
+    if forbidden:
+        raise HTTPException(status_code=403, detail=f"Ленты не принадлежат пользователю: {forbidden}")
     try:
         from src.digest.feed_digest import FeedDigestOptions, build_digest_by_feeds
         opts = FeedDigestOptions(from_date=body.from_date, to_date=body.to_date)
@@ -789,16 +801,17 @@ def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_cu
     response_model=FeedItem,
     status_code=201,
 )
-def add_feed(body: FeedCreate, current_user: dict = Depends(get_current_user)):
+def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует."""
-    from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds
+    from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds, refresh_catalog_stats
     conn = get_connection()
     ensure_tables(conn)
-    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, description=body.description, category=body.category, folder_id=body.folder_id)
+    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, description=body.description, category=body.category, folder_id=body.folder_id, user_id=current_user["id"])
     if not feed:
         raise HTTPException(status_code=500, detail="Не удалось создать ленту")
-    feeds = list_feeds(conn)
+    feeds = list_feeds(conn, user_id=current_user["id"])
     full_feed = next((f for f in feeds if f["id"] == feed["id"]), feed)
+    background_tasks.add_task(refresh_catalog_stats, conn)
     return FeedItem(**full_feed)
 
 
@@ -812,7 +825,7 @@ def get_feeds(include_hidden: bool = False, current_user: dict = Depends(get_cur
     """Возвращает все ленты на которые подписан пользователь. Используется для отрисовки боковой панели."""
     from src.tools.db_state import get_connection, list_feeds
     conn = get_connection()
-    return [FeedItem(**f) for f in list_feeds(conn, include_hidden=include_hidden)]
+    return [FeedItem(**f) for f in list_feeds(conn, user_id=current_user["id"], include_hidden=include_hidden)]
 
 
 @app.get(
@@ -826,7 +839,7 @@ def get_feed(feed_id: int, current_user: dict = Depends(get_current_user)):
     """Возвращает данные одной ленты пользователя: название, favicon, unread_count и т.д. 404 если пользователь не подписан на эту ленту."""
     from src.tools.db_state import get_connection, get_user_feed_by_id
     conn = get_connection()
-    feed = get_user_feed_by_id(conn, feed_id)
+    feed = get_user_feed_by_id(conn, feed_id, user_id=current_user["id"])
     if not feed:
         raise HTTPException(status_code=404, detail="Подписка не найдена")
     return FeedItem(**feed)
@@ -839,12 +852,13 @@ def get_feed(feed_id: int, current_user: dict = Depends(get_current_user)):
     status_code=204,
     responses={404: {"description": "Подписка не найдена"}},
 )
-def remove_feed(feed_id: int, current_user: dict = Depends(get_current_user)):
+def remove_feed(feed_id: int, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Удаляет подписку пользователя на ленту. Саму ленту не удаляет."""
-    from src.tools.db_state import get_connection, delete_feed
+    from src.tools.db_state import get_connection, delete_feed, refresh_catalog_stats
     conn = get_connection()
-    if not delete_feed(conn, feed_id):
+    if not delete_feed(conn, feed_id, user_id=current_user["id"]):
         raise HTTPException(status_code=404, detail="Подписка не найдена")
+    background_tasks.add_task(refresh_catalog_stats, conn)
 
 
 @app.patch(
@@ -858,7 +872,7 @@ def patch_feed(feed_id: int, body: FeedUpdate, current_user: dict = Depends(get_
     """Обновляет название, статус (включена/выключена) или папку ленты."""
     from src.tools.db_state import get_connection, update_feed
     conn = get_connection()
-    updated = update_feed(conn, feed_id, **body.model_dump(exclude_unset=True))
+    updated = update_feed(conn, feed_id, user_id=current_user["id"], **body.model_dump(exclude_unset=True))
     if not updated:
         raise HTTPException(status_code=404, detail="Подписка не найдена")
     return FeedItem(**updated)
@@ -902,7 +916,7 @@ def create_folder_endpoint(body: FolderCreate, current_user: dict = Depends(get_
     """Создаёт папку в боковой панели пользователя."""
     from src.tools.db_state import get_connection, create_folder
     conn = get_connection()
-    folder = create_folder(conn, name=body.name, favicon_url=body.favicon_url)
+    folder = create_folder(conn, name=body.name, favicon_url=body.favicon_url, user_id=current_user["id"])
     return FolderItem(**folder)
 
 
@@ -916,7 +930,7 @@ def get_folders(current_user: dict = Depends(get_current_user)):
     """Возвращает все папки пользователя, отсортированные по позиции."""
     from src.tools.db_state import get_connection, list_folders
     conn = get_connection()
-    return [FolderItem(**f) for f in list_folders(conn)]
+    return [FolderItem(**f) for f in list_folders(conn, user_id=current_user["id"])]
 
 
 @app.patch(
@@ -930,7 +944,7 @@ def patch_folder(folder_id: int, body: FolderUpdate, current_user: dict = Depend
     """Обновляет название или позицию папки."""
     from src.tools.db_state import get_connection, update_folder
     conn = get_connection()
-    folder = update_folder(conn, folder_id, **body.model_dump(exclude_unset=True))
+    folder = update_folder(conn, folder_id, user_id=current_user["id"], **body.model_dump(exclude_unset=True))
     if not folder:
         raise HTTPException(status_code=404, detail="Папка не найдена")
     return FolderItem(**folder)
@@ -947,7 +961,7 @@ def delete_folder_endpoint(folder_id: int, current_user: dict = Depends(get_curr
     """Удаляет папку. Ленты внутри перемещаются в корень боковой панели."""
     from src.tools.db_state import get_connection, delete_folder
     conn = get_connection()
-    if not delete_folder(conn, folder_id):
+    if not delete_folder(conn, folder_id, user_id=current_user["id"]):
         raise HTTPException(status_code=404, detail="Папка не найдена")
 
 
@@ -973,7 +987,7 @@ def get_catalog(current_user: dict = Depends(get_current_user)):
     from urllib.parse import urlparse
     from config.config import RSS_SOURCE_DESCRIPTIONS
     conn = get_connection()
-    rows = list_catalog_feeds(conn)
+    rows = list_catalog_feeds(conn, user_id=current_user["id"])
     result = []
     for r in rows:
         domain = urlparse(r["url"]).hostname or ""
@@ -1340,6 +1354,48 @@ def mark_feed_read_all(feed_id: int, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=404, detail="Лента не найдена")
     marked = mark_feed_all_read(conn, feed_id=feed_id)
     return {"marked": marked}
+
+
+# ─────────────────────────────────────────────────────────────
+#  Миграция данных (МП.2)
+# ─────────────────────────────────────────────────────────────
+
+@app.post(
+    "/api/admin/migrate-legacy-data",
+    tags=["Админ"],
+    summary="Перенести данные user_id=0 на первого пользователя",
+    include_in_schema=True,
+)
+def migrate_legacy_data(current_user: dict = Depends(get_current_user)):
+    """
+    Одноразовая миграция: переносит все данные user_id=0 на первого зарегистрированного пользователя (id=1).
+    Вызывается вручную после развёртывания МП.2.
+    Требует авторизации. Безопасно повторять — UPDATE WHERE user_id=0 без данных не упадёт.
+    """
+    from src.tools.db_state import get_connection
+    conn = get_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1;")
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="В системе нет зарегистрированных пользователей")
+        target_user_id = row["id"]
+        cur.execute("UPDATE user_feeds SET user_id = %s WHERE user_id = 0;", (target_user_id,))
+        feeds_updated = cur.rowcount
+        cur.execute("UPDATE feed_folders SET user_id = %s WHERE user_id = 0;", (target_user_id,))
+        folders_updated = cur.rowcount
+        cur.execute("UPDATE article_reads SET user_id = %s WHERE user_id = 0;", (target_user_id,))
+        reads_updated = cur.rowcount
+        cur.execute("UPDATE article_bookmarks SET user_id = %s WHERE user_id = 0;", (target_user_id,))
+        bookmarks_updated = cur.rowcount
+    conn.commit()
+    return {
+        "target_user_id": target_user_id,
+        "user_feeds_updated": feeds_updated,
+        "feed_folders_updated": folders_updated,
+        "article_reads_updated": reads_updated,
+        "article_bookmarks_updated": bookmarks_updated,
+    }
 
 
 if FRONTEND_DIR.exists():

@@ -80,6 +80,16 @@ export function HomePage() {
     }
   };
 
+  // Тихое обновление каталога — без setIsLoading, скролл не сбрасывается
+  const silentReloadCatalog = async () => {
+    try {
+      const data = await api.getCatalog();
+      setCatalog(data);
+    } catch (e) {
+      console.error("Ошибка обновления каталога:", e);
+    }
+  };
+
   const loadHiddenFeeds = async () => {
     try {
       const feeds = await api.getFeeds(true);
@@ -101,7 +111,10 @@ export function HomePage() {
       } else {
         await api.addFeed({ url: feeds[0].url, name: feeds[0].name, favicon_url: feeds[0].favicon_url, description: feeds[0].description, category: feeds[0].category });
       }
-      await loadCatalog();
+      const subscribedIds = new Set(feeds.map((f) => f.id));
+      setCatalog((prev) => prev.map((f) => subscribedIds.has(f.id) ? { ...f, is_subscribed: true } : f));
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
+      setTimeout(silentReloadCatalog, 1500);
     } catch (e) {
       console.error("Ошибка при подписке:", e);
     }
@@ -111,7 +124,6 @@ export function HomePage() {
     const domain = getDomain(feed.url);
     const sameDomainSubscribed = catalog.filter((f) => getDomain(f.url) === domain && f.is_subscribed);
     try {
-      // Найти folder_id через список подписок
       const myFeeds = await api.getFeeds(true);
       const folderIds = new Set(
         myFeeds
@@ -120,8 +132,11 @@ export function HomePage() {
       );
       await Promise.all(sameDomainSubscribed.map((f) => api.deleteFeed(f.id)));
       await Promise.all([...folderIds].map((fid) => api.deleteFolder(fid)));
-      await loadCatalog();
+      const unsubscribedIds = new Set(sameDomainSubscribed.map((f) => f.id));
+      setCatalog((prev) => prev.map((f) => unsubscribedIds.has(f.id) ? { ...f, is_subscribed: false } : f));
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
       await loadHiddenFeeds();
+      setTimeout(silentReloadCatalog, 1500);
     } catch (e) {
       console.error("Ошибка при отписке:", e);
     }
@@ -383,7 +398,12 @@ export function HomePage() {
                   <div className="flex items-center gap-4 mb-2 mt-auto text-xs text-gray-500">
                     <div className="flex items-center gap-1" title="Подписчики">
                       <Users className="w-3.5 h-3.5" />
-                      <span>{formatSubscribers(feeds.reduce((sum, f) => sum + f.subscribers, 0))}</span>
+                      <span>{(() => {
+                        const vals = feeds.map((f) => f.subscribers);
+                        const mn = Math.min(...vals);
+                        const mx = Math.max(...vals);
+                        return mn === mx ? formatSubscribers(mx) : `${formatSubscribers(mn)}–${formatSubscribers(mx)}`;
+                      })()}</span>
                     </div>
                     <div className="flex items-center gap-1" title="Постов в неделю">
                       <BarChart3 className="w-3.5 h-3.5" />

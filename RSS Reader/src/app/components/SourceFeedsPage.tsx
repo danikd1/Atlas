@@ -80,6 +80,16 @@ export function SourceFeedsPage() {
     }
   };
 
+  const silentReloadFeeds = async () => {
+    try {
+      const catalog = await api.getCatalog();
+      const domainFeeds = catalog.filter((f) => getDomain(f.url) === domain);
+      setFeeds(domainFeeds);
+    } catch (e) {
+      console.error("Ошибка обновления лент:", e);
+    }
+  };
+
   const handleSubscribe = async (feed: ApiCatalogFeed) => {
     try {
       await api.addFeed({
@@ -89,7 +99,9 @@ export function SourceFeedsPage() {
         description: feed.description,
         category: feed.category,
       });
-      await loadFeeds();
+      setFeeds((prev) => prev.map((f) => f.id === feed.id ? { ...f, is_subscribed: true } : f));
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
+      setTimeout(silentReloadFeeds, 1500);
     } catch (e) {
       console.error("Ошибка при подписке:", e);
     }
@@ -98,7 +110,9 @@ export function SourceFeedsPage() {
   const handleUnsubscribe = async (feed: ApiCatalogFeed) => {
     try {
       await api.deleteFeed(feed.id);
-      await loadFeeds();
+      setFeeds((prev) => prev.map((f) => f.id === feed.id ? { ...f, is_subscribed: false } : f));
+      window.dispatchEvent(new CustomEvent("feeds-updated"));
+      setTimeout(silentReloadFeeds, 1500);
     } catch (e) {
       console.error("Ошибка при отписке:", e);
     }

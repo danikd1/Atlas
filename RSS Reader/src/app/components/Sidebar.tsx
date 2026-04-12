@@ -32,7 +32,9 @@ const ItemTypes = { FEED: "feed" };
 // ─── Collapse state in localStorage ──────────────────────────
 
 function getFolderCollapsed(folderId: string): boolean {
-  return localStorage.getItem(`folder_${folderId}_collapsed`) === "true";
+  const stored = localStorage.getItem(`folder_${folderId}_collapsed`);
+  // Нет записи = новая папка → свёрнута по умолчанию
+  return stored === null ? true : stored === "true";
 }
 
 function setFolderCollapsed(folderId: string, collapsed: boolean) {

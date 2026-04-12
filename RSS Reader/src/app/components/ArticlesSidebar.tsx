@@ -349,7 +349,7 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
                 onClick={handleArticleClick}
                 onReadChange={handleReadChange}
                 onSavedChange={handleSavedChange}
-                showSource={isMultiFeed || source.kind !== "feed"}
+                showSource={true}
               />
             ))}
             {hasMore && (
