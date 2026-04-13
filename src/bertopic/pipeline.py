@@ -55,6 +55,9 @@ def run_async(
     source_filter: Optional[str] = None,
     limit: Optional[int] = None,
     days_back: Optional[int] = None,
+    user_id: Optional[int] = None,
+    gigachat_credentials: Optional[str] = None,
+    gigachat_model: Optional[str] = None,
 ) -> str:
     """Запускает пайплайн в фоновом потоке. Возвращает task_id."""
     task_id = str(uuid.uuid4())
@@ -66,11 +69,13 @@ def run_async(
             "result": None,
             "error": None,
             "started_at": datetime.now().isoformat(),
+            "gigachat_credentials": gigachat_credentials,
+            "gigachat_model": gigachat_model,
         }
 
     thread = threading.Thread(
         target=_run,
-        args=(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back),
+        args=(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back, user_id, gigachat_credentials, gigachat_model),
         daemon=True,
     )
     thread.start()
@@ -79,7 +84,7 @@ def run_async(
 
 # ── Internal pipeline ──────────────────────────────────────────────────────
 
-def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back=None):
+def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back=None, user_id=None, gigachat_credentials=None, gigachat_model=None):
     _set(task_id, status="running", progress=0.0, message="Инициализация...")
 
     try:
@@ -87,7 +92,7 @@ def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, 
 
         # ── [1/6] Загрузка статей ──────────────────────────────────────────
         _set(task_id, progress=0.05, message="Загружаем статьи из БД...")
-        docs, meta = _load_articles(limit=limit, source_filter=source_filter, days_back=days_back)
+        docs, meta = _load_articles(limit=limit, source_filter=source_filter, days_back=days_back, user_id=user_id)
 
         if len(docs) < 20:
             raise ValueError(
@@ -118,7 +123,8 @@ def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, 
         # ── [5/6] Коллекции в БД ──────────────────────────────────────────
         _set(task_id, progress=0.72, message="Создаём коллекции в БД...")
         n_collections, n_assignments = _load_to_db(
-            topic_model, topics, meta, topics_data, model_version
+            topic_model, topics, meta, topics_data, model_version, owner_id=user_id,
+            gigachat_credentials=gigachat_credentials, gigachat_model=gigachat_model,
         )
         _set(task_id, progress=0.95, message=f"Создано {n_collections} коллекций, {n_assignments} назначений")
 
@@ -149,6 +155,7 @@ def _load_articles(
     limit: Optional[int],
     source_filter: Optional[str],
     days_back: Optional[int] = None,
+    user_id: Optional[int] = None,
 ) -> Tuple[List[str], List[Dict]]:
     from src.tools.db_state import get_connection
     from config.config import POSTGRES_TABLE_PROCESSED_ARTICLES
@@ -157,25 +164,29 @@ def _load_articles(
     if conn is None:
         raise RuntimeError("Нет подключения к БД")
 
-    conditions = ["title IS NOT NULL", "summary IS NOT NULL", "summary != ''"]
+    conditions = ["pa.title IS NOT NULL", "pa.summary IS NOT NULL", "pa.summary != ''"]
     params: list = []
 
     if days_back:
-        conditions.append("published_at >= NOW() - INTERVAL '1 day' * %s")
+        conditions.append("pa.published_at >= NOW() - INTERVAL '1 day' * %s")
         params.append(days_back)
 
     if source_filter:
-        conditions.append("source ILIKE %s")
+        conditions.append("pa.source ILIKE %s")
         params.append(f"%{source_filter}%")
+
+    if user_id is not None:
+        conditions.append("pa.feed_id IN (SELECT feed_id FROM user_feeds WHERE user_id = %s)")
+        params.append(user_id)
 
     where = " AND ".join(conditions)
     limit_clause = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
-        SELECT link, title, summary, source, published_at
-        FROM {POSTGRES_TABLE_PROCESSED_ARTICLES}
+        SELECT pa.link, pa.title, pa.summary, pa.source, pa.published_at
+        FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
         WHERE {where}
-        ORDER BY published_at DESC NULLS LAST
+        ORDER BY pa.published_at DESC NULLS LAST
         {limit_clause};
     """
 
@@ -331,7 +342,7 @@ def _save_outputs(topic_model, topics, meta, docs, n_categories):
     return topics_data
 
 
-def _load_to_db(topic_model, topics, meta, topics_data, model_version):
+def _load_to_db(topic_model, topics, meta, topics_data, model_version, owner_id=None, gigachat_credentials=None, gigachat_model=None):
     """Создаёт коллекции и записывает assignments в БД."""
     from src.tools.db_state import (
         get_connection,
@@ -349,9 +360,9 @@ def _load_to_db(topic_model, topics, meta, topics_data, model_version):
 
     ensure_tables(conn)
 
-    # Удаляем старые коллекции и assignments — каждый запуск создаёт свежие
-    n_del_assign = delete_bertopic_assignments(conn)
-    n_del_col = delete_bertopic_collections(conn)
+    # Удаляем старые коллекции и assignments пользователя — каждый запуск создаёт свежие
+    n_del_assign = delete_bertopic_assignments(conn, owner_id=owner_id)
+    n_del_col = delete_bertopic_collections(conn, owner_id=owner_id)
     conn.commit()
     if n_del_col or n_del_assign:
         logger.info("Удалено: коллекций=%d, assignments=%d", n_del_col, n_del_assign)
@@ -359,12 +370,12 @@ def _load_to_db(topic_model, topics, meta, topics_data, model_version):
     # GigaChat (опционально)
     client = None
     rate_limiter = None
-    if GIGACHAT_SUMMARIZATION_ENABLED:
+    if gigachat_credentials:
         try:
             from src.tools.llm_utils import create_gigachat_client
             from src.tools.rate_limiter import RateLimiter
             from config.config import DEFAULT_LLM_SLEEP
-            client = create_gigachat_client()
+            client = create_gigachat_client(credentials=gigachat_credentials, model=gigachat_model)
             rate_limiter = RateLimiter(delay_seconds=DEFAULT_LLM_SLEEP)
         except Exception as e:
             logger.warning("GigaChat недоступен: %s", e)
@@ -393,6 +404,7 @@ def _load_to_db(topic_model, topics, meta, topics_data, model_version):
             model_version=model_version,
             description=topic_description,
             keywords=keywords,
+            owner_id=owner_id,
         )
         if collection:
             collection_map[t_id] = collection["id"]
@@ -403,7 +415,7 @@ def _load_to_db(topic_model, topics, meta, topics_data, model_version):
         for t_id, m in zip(topics, meta)
         if t_id >= 0 and m["link"]
     ]
-    n_assignments = upsert_bertopic_assignments(conn, assignments, model_version)
+    n_assignments = upsert_bertopic_assignments(conn, assignments, model_version, owner_id=owner_id)
 
     conn.commit()
     conn.close()

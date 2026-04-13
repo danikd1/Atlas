@@ -29,6 +29,12 @@ class AuthResponse(BaseModel):
 class UserInfo(BaseModel):
     id: int
     email: str
+    created_at: Optional[datetime] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6)
 
 
 # ─── Router ──────���─────────────────────────────────────────────────────────
@@ -357,6 +363,12 @@ class BookmarkRequest(BaseModel):
     link: str = Field(..., description="URL статьи.")
 
 
+class SummarizeRequest(BaseModel):
+    """Параметры запроса AI-резюме статьи."""
+    gigachat_credentials: Optional[str] = Field(default=None)
+    gigachat_model: Optional[str] = Field(default=None)
+
+
 class SummarizeResponse(BaseModel):
     """Ответ эндпоинта суммаризации статьи."""
     ai_summary: Optional[str] = Field(
@@ -445,6 +457,8 @@ class FeedQARequest(BaseModel):
     from_date: Optional[datetime] = Field(default=None, description="Начало периода (ISO 8601).")
     to_date: Optional[datetime] = Field(default=None, description="Конец периода (ISO 8601).")
     top_k: int = Field(default=12, ge=1, le=40, description="Количество статей-источников для контекста.")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
 
     model_config = {
         "json_schema_extra": {
@@ -478,6 +492,8 @@ class FeedDigestRequest(BaseModel):
     collection_id: Optional[int] = Field(default=None, description="ID BERTopic-коллекции (приоритет над feed_ids).")
     from_date: Optional[datetime] = Field(default=None, description="Начало периода.")
     to_date: Optional[datetime] = Field(default=None, description="Конец периода.")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
 
     model_config = {
         "json_schema_extra": {
@@ -506,6 +522,8 @@ class BertopicRunRequest(BaseModel):
     source_filter: Optional[str] = Field(default=None, description="Фильтр по источнику (ILIKE).")
     limit: Optional[int] = Field(default=None, ge=100, description="Лимит статей (по умолчанию все).")
     days_back: Optional[int] = Field(default=None, ge=1, description="Статьи за последние N дней (None = все).")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
 
 
 class BertopicRunResponse(BaseModel):
@@ -537,4 +555,16 @@ class BertopicTopicItem(BaseModel):
 class BertopicTopicsResponse(BaseModel):
     topics: List[BertopicTopicItem]
     total: int
+
+
+# ── GigaChat credentials test ──────────────────────────────────────────────
+
+class GigaChatTestRequest(BaseModel):
+    credentials: str = Field(..., description="GigaChat API-ключ для проверки.")
+    model: Optional[str] = Field(default=None, description="Модель GigaChat (опционально).")
+
+
+class GigaChatTestResponse(BaseModel):
+    ok: bool = Field(description="True если подключение успешно.")
+    error: Optional[str] = Field(default=None, description="Описание ошибки если ok=False.")
 

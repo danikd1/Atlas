@@ -34,6 +34,7 @@ from .schemas import (
     AuthResponse,
     BookmarkRequest,
     SummarizeResponse,
+    SummarizeRequest,
     CatalogFeedItem,
     CollectionArticle,
     CollectionItem,
@@ -65,6 +66,9 @@ from .schemas import (
     BertopicTopicItem,
     BertopicTopicsResponse,
     UserInfo,
+    ChangePasswordRequest,
+    GigaChatTestRequest,
+    GigaChatTestResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -279,6 +283,22 @@ def auth_me(current_user: dict = Depends(get_current_user)):
 
 
 @app.post(
+    "/api/auth/change-password",
+    tags=["Auth"],
+    summary="Смена пароля",
+)
+def change_password(body: ChangePasswordRequest, current_user: dict = Depends(get_current_user)):
+    from src.tools.db_state import get_connection, get_user_by_id, update_user_password
+    conn = get_connection()
+    user = get_user_by_id(conn, current_user["id"])
+    if not verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Неверный текущий пароль")
+    update_user_password(conn, current_user["id"], hash_password(body.new_password))
+    conn.commit()
+    return {"ok": True}
+
+
+@app.post(
     "/api/router",
     tags=["Роутер"],
     summary="Подбор темы по запросу пользователя",
@@ -311,7 +331,7 @@ def list_collections(current_user: dict = Depends(get_current_user)):
     """Возвращает все коллекции, созданные в системе, с метаданными таксономии и датами обновления."""
     from src.tools.db_state import get_connection, list_collections as _list
     conn = get_connection()
-    rows = _list(conn)
+    rows = _list(conn, owner_id=current_user["id"])
     return [CollectionItem(**r) for r in rows]
 
 
@@ -326,7 +346,7 @@ def list_collections(current_user: dict = Depends(get_current_user)):
 def get_collection(collection_id: int, current_user: dict = Depends(get_current_user)):
     from src.tools.db_state import get_connection, get_collection_by_id
     conn = get_connection()
-    row = get_collection_by_id(conn, collection_id)
+    row = get_collection_by_id(conn, collection_id, owner_id=current_user["id"])
     if not row:
         raise HTTPException(status_code=404, detail="Коллекция не найдена")
     return CollectionItem(**row)
@@ -343,7 +363,7 @@ def get_collection(collection_id: int, current_user: dict = Depends(get_current_
 def list_collection_articles(collection_id: int, current_user: dict = Depends(get_current_user)):
     from src.tools.db_state import get_connection, get_collection_by_id, get_articles_for_collection
     conn = get_connection()
-    if not get_collection_by_id(conn, collection_id):
+    if not get_collection_by_id(conn, collection_id, owner_id=current_user["id"]):
         raise HTTPException(status_code=404, detail="Коллекция не найдена")
     rows = get_articles_for_collection(conn, collection_id)
     return [CollectionArticle(**r) for r in rows]
@@ -470,6 +490,11 @@ def qa_ask(body: QARequest, current_user: dict = Depends(get_current_user)):
     """
     try:
         from src.agents.qa_agent import run_qa_agent
+        from src.tools.db_state import get_connection, get_collection_by_id
+        if body.collection_id is not None:
+            conn = get_connection()
+            if not get_collection_by_id(conn, body.collection_id, owner_id=current_user["id"]):
+                raise HTTPException(status_code=404, detail="Коллекция не найдена")
         result = run_qa_agent(
             user_query=body.question.strip(),
             collection_id=body.collection_id,
@@ -506,11 +531,13 @@ def qa_ask(body: QARequest, current_user: dict = Depends(get_current_user)):
 )
 def get_collection_date_range(collection_id: int, current_user: dict = Depends(get_current_user)):
     """Возвращает min/max published_at статей в коллекции для ограничения date picker."""
-    from src.tools.db_state import get_connection
+    from src.tools.db_state import get_connection, get_collection_by_id
     from config.config import POSTGRES_TABLE_RAG_DOCUMENTS
     conn = get_connection()
     if conn is None:
         raise HTTPException(status_code=503, detail="БД недоступна")
+    if not get_collection_by_id(conn, collection_id, owner_id=current_user["id"]):
+        raise HTTPException(status_code=404, detail="Коллекция не найдена")
     with conn.cursor() as cur:
         cur.execute(
             f"SELECT MIN(published_at), MAX(published_at) FROM {POSTGRES_TABLE_RAG_DOCUMENTS} WHERE collection_id = %s AND published_at IS NOT NULL",
@@ -547,6 +574,10 @@ def get_digest(
     """
     try:
         from src.digest.digest_builder import build_digest, DigestOptions, DigestResult
+        from src.tools.db_state import get_connection, get_collection_by_id
+        conn = get_connection()
+        if not get_collection_by_id(conn, collection_id, owner_id=current_user["id"]):
+            raise HTTPException(status_code=404, detail="Коллекция не найдена")
         options = DigestOptions(from_date=from_date, to_date=to_date)
         result: DigestResult = build_digest(collection_id, options=options)
         return {
@@ -561,6 +592,25 @@ def get_digest(
     except Exception as e:
         logger.exception("Digest error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GigaChat credentials test ────────────────────────────────────────────────
+
+@app.post(
+    "/api/gigachat/test",
+    tags=["GigaChat"],
+    response_model=GigaChatTestResponse,
+    summary="Проверить подключение к GigaChat",
+)
+def test_gigachat(body: GigaChatTestRequest, current_user: dict = Depends(get_current_user)):
+    """Проверяет корректность переданных GigaChat credentials минимальным тестовым запросом."""
+    try:
+        from src.tools.llm_utils import create_gigachat_client
+        client = create_gigachat_client(credentials=body.credentials, model=body.model)
+        client.chat({"messages": [{"role": "user", "content": "Привет"}], "max_tokens": 5})
+        return GigaChatTestResponse(ok=True)
+    except Exception as e:
+        return GigaChatTestResponse(ok=False, error=str(e))
 
 
 # ─── BERTopic ─────────────────────────────────────────────────────────────────
@@ -584,6 +634,9 @@ def bertopic_run(body: BertopicRunRequest, current_user: dict = Depends(get_curr
         source_filter=body.source_filter,
         limit=body.limit,
         days_back=body.days_back,
+        user_id=current_user["id"],
+        gigachat_credentials=body.gigachat_credentials,
+        gigachat_model=body.gigachat_model,
     )
     return BertopicRunResponse(
         task_id=task_id,
@@ -631,7 +684,7 @@ def bertopic_topics(current_user: dict = Depends(get_current_user)):
     if conn is None:
         raise HTTPException(status_code=503, detail="Нет подключения к БД")
     try:
-        rows = get_bertopic_topics(conn)
+        rows = get_bertopic_topics(conn, owner_id=current_user["id"])
         topics = [
             BertopicTopicItem(
                 id=row["id"],
@@ -662,12 +715,15 @@ def bertopic_collection_articles(collection_id: int, current_user: dict = Depend
     Загружает статьи темы через bertopic_assignments → processed_articles.
     Работает даже если skip_rag=True (rag_documents пустые).
     """
-    from src.tools.db_state import get_connection, get_articles_for_bertopic_collection
+    from src.tools.db_state import get_connection, get_articles_for_bertopic_collection, get_collection_by_id
     conn = get_connection()
     if conn is None:
         raise HTTPException(status_code=503, detail="Нет подключения к БД")
     try:
-        rows = get_articles_for_bertopic_collection(conn, collection_id)
+        collection = get_collection_by_id(conn, collection_id, owner_id=current_user["id"])
+        if not collection:
+            raise HTTPException(status_code=403, detail="Коллекция не найдена или не принадлежит пользователю")
+        rows = get_articles_for_bertopic_collection(conn, collection_id, user_id=current_user["id"])
         return rows
     except Exception as e:
         logger.exception("BERTopic collection articles error: %s", e)
@@ -696,8 +752,10 @@ def feed_qa(body: FeedQARequest, current_user: dict = Depends(get_current_user))
             top_k=body.top_k,
             from_date=body.from_date,
             to_date=body.to_date,
+            gigachat_credentials=body.gigachat_credentials,
+            gigachat_model=body.gigachat_model,
         )
-        result = answer_question_by_feeds(body.question.strip(), body.feed_ids, opts, collection_id=body.collection_id)
+        result = answer_question_by_feeds(body.question.strip(), body.feed_ids, opts, collection_id=body.collection_id, user_id=current_user["id"])
         return FeedQAResponse(
             status="ok",
             answer=result.answer,
@@ -734,8 +792,13 @@ def feed_digest(body: FeedDigestRequest, current_user: dict = Depends(get_curren
         raise HTTPException(status_code=403, detail=f"Ленты не принадлежат пользователю: {forbidden}")
     try:
         from src.digest.feed_digest import FeedDigestOptions, build_digest_by_feeds
-        opts = FeedDigestOptions(from_date=body.from_date, to_date=body.to_date)
-        result = build_digest_by_feeds(body.feed_ids, opts, collection_id=body.collection_id)
+        opts = FeedDigestOptions(
+            from_date=body.from_date,
+            to_date=body.to_date,
+            gigachat_credentials=body.gigachat_credentials,
+            gigachat_model=body.gigachat_model,
+        )
+        result = build_digest_by_feeds(body.feed_ids, opts, collection_id=body.collection_id, user_id=current_user["id"])
         return {
             "title": result.title,
             "feed_ids": result.feed_ids,
@@ -897,7 +960,7 @@ def get_feed_articles(feed_id: int, page: int = 1, unread_only: bool = False, cu
     """
     from src.tools.db_state import get_connection, list_feed_articles
     conn = get_connection()
-    articles = list_feed_articles(conn, feed_id=feed_id, page=page, unread_only=unread_only)
+    articles = list_feed_articles(conn, feed_id=feed_id, page=page, unread_only=unread_only, user_id=current_user["id"])
     return [ArticleItem(**a) for a in articles]
 
 
@@ -1067,7 +1130,7 @@ def get_all_articles(page: int = 1, current_user: dict = Depends(get_current_use
     """Возвращает все статьи из подписок пользователя, новые первые. Скрытые ленты исключены."""
     from src.tools.db_state import get_connection, list_all_articles
     conn = get_connection()
-    return [ArticleItem(**a) for a in list_all_articles(conn, page=page)]
+    return [ArticleItem(**a) for a in list_all_articles(conn, user_id=current_user["id"], page=page)]
 
 
 @app.get(
@@ -1081,7 +1144,7 @@ def get_unread_articles(page: int = 1, current_user: dict = Depends(get_current_
     """Возвращает непрочитанные статьи из всех активных лент пользователя, новые первые."""
     from src.tools.db_state import get_connection, list_unread_articles
     conn = get_connection()
-    return [ArticleItem(**a) for a in list_unread_articles(conn, page=page)]
+    return [ArticleItem(**a) for a in list_unread_articles(conn, user_id=current_user["id"], page=page)]
 
 
 @app.get(
@@ -1095,7 +1158,7 @@ def get_today_articles(current_user: dict = Depends(get_current_user)):
     """Возвращает все статьи из лент пользователя опубликованные сегодня, новые первые."""
     from src.tools.db_state import get_connection, list_today_articles
     conn = get_connection()
-    return [ArticleItem(**a) for a in list_today_articles(conn)]
+    return [ArticleItem(**a) for a in list_today_articles(conn, user_id=current_user["id"])]
 
 
 @app.get(
@@ -1118,7 +1181,7 @@ def get_articles_by_feeds(feed_ids: str, page: int = 1, current_user: dict = Dep
     if not ids:
         return []
     conn = get_connection()
-    return [ArticleItem(**a) for a in list_articles_by_feed_ids(conn, ids, page=page)]
+    return [ArticleItem(**a) for a in list_articles_by_feed_ids(conn, ids, page=page, user_id=current_user["id"])]
 
 
 @app.get(
@@ -1133,7 +1196,7 @@ def search_articles_endpoint(q: str, limit: int = 20, current_user: dict = Depen
         return []
     from src.tools.db_state import get_connection, search_articles
     conn = get_connection()
-    return [ArticleItem(**a) for a in search_articles(conn, q.strip(), limit=min(limit, 50))]
+    return [ArticleItem(**a) for a in search_articles(conn, q.strip(), user_id=current_user["id"], limit=min(limit, 50))]
 
 
 @app.get(
@@ -1151,7 +1214,7 @@ def get_article(article_id: int, current_user: dict = Depends(get_current_user))
     """
     from src.tools.db_state import get_connection, get_article_by_id, update_article_full_text
     conn = get_connection()
-    article = get_article_by_id(conn, article_id)
+    article = get_article_by_id(conn, article_id, user_id=current_user["id"])
     if not article:
         raise HTTPException(status_code=404, detail="Статья не найдена")
 
@@ -1175,14 +1238,14 @@ def get_article(article_id: int, current_user: dict = Depends(get_current_user))
     response_model=SummarizeResponse,
     responses={404: {"description": "Статья не найдена"}},
 )
-def summarize_article_endpoint(article_id: int, force: bool = False, current_user: dict = Depends(get_current_user)):
+def summarize_article_endpoint(article_id: int, force: bool = False, body: SummarizeRequest = SummarizeRequest(), current_user: dict = Depends(get_current_user)):
     """
     Генерирует краткое AI-резюме статьи (3–4 предложения).
 
     Логика:
     1. Если ai_summary уже есть в БД и force=False — возвращает его мгновенно (cached=true).
     2. Если full_text отсутствует — извлекает с оригинального сайта через trafilatura.
-    3. Вызывает summarize_article() из llm_utils (GigaChat → BART fallback).
+    3. Вызывает summarize_article() из llm_utils (GigaChat → ошибка если нет credentials).
     4. Сохраняет результат в processed_articles.ai_summary для кэширования.
 
     force=true — пересчитать даже если кэш есть (например, при смене модели).
@@ -1220,14 +1283,16 @@ def summarize_article_endpoint(article_id: int, force: bool = False, current_use
             error="Не удалось извлечь текст статьи",
         )
 
-    # 3. Суммаризация через GigaChat → BART fallback
+    # 3. Суммаризация через GigaChat
     try:
         from src.tools.llm_utils import create_gigachat_client, summarize_article
         try:
-            giga_client = create_gigachat_client()
-        except Exception as e:
-            logger.warning("Не удалось создать GigaChat клиент: %s — будет BART fallback", e)
-            giga_client = None
+            giga_client = create_gigachat_client(
+                credentials=body.gigachat_credentials,
+                model=body.gigachat_model,
+            )
+        except ValueError as e:
+            return SummarizeResponse(ai_summary=None, cached=False, error=str(e))
         summary = summarize_article(
             title=article.get("title") or "",
             full_text=full_text,
@@ -1262,7 +1327,7 @@ def translate_article_endpoint(article_id: int, current_user: dict = Depends(get
     from src.tools.translation import translate_article
 
     conn = get_connection()
-    article = get_article_by_id(conn, article_id)
+    article = get_article_by_id(conn, article_id, user_id=current_user["id"])
     if not article:
         raise HTTPException(status_code=404, detail="Статья не найдена")
 
@@ -1284,7 +1349,7 @@ def mark_read(body: ArticleReadRequest, current_user: dict = Depends(get_current
     """Записывает факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, mark_article_read
     conn = get_connection()
-    mark_article_read(conn, link=body.link)
+    mark_article_read(conn, link=body.link, user_id=current_user["id"])
     return {"ok": True}
 
 
@@ -1298,7 +1363,7 @@ def mark_unread(body: ArticleReadRequest, current_user: dict = Depends(get_curre
     """Удаляет факт прочтения статьи. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, mark_article_unread
     conn = get_connection()
-    mark_article_unread(conn, link=body.link)
+    mark_article_unread(conn, link=body.link, user_id=current_user["id"])
     return {"ok": True}
 
 
@@ -1310,7 +1375,7 @@ def mark_unread(body: ArticleReadRequest, current_user: dict = Depends(get_curre
 def add_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_current_user)):
     """Добавляет статью в закладки. Повторный вызов безопасен (idempotent)."""
     from src.tools.db_state import get_connection, add_bookmark as _add_bookmark
-    _add_bookmark(get_connection(), link=body.link)
+    _add_bookmark(get_connection(), link=body.link, user_id=current_user["id"])
     return {"ok": True}
 
 
@@ -1322,7 +1387,7 @@ def add_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_current
 def remove_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_current_user)):
     """Удаляет статью из закладок."""
     from src.tools.db_state import get_connection, remove_bookmark as _remove_bookmark
-    _remove_bookmark(get_connection(), link=body.link)
+    _remove_bookmark(get_connection(), link=body.link, user_id=current_user["id"])
     return {"ok": True}
 
 
@@ -1335,7 +1400,7 @@ def remove_bookmark(body: BookmarkRequest, current_user: dict = Depends(get_curr
 def get_bookmarks(page: int = 1, current_user: dict = Depends(get_current_user)):
     """Возвращает закладки пользователя, отсортированные по дате сохранения (новые первые)."""
     from src.tools.db_state import get_connection, list_bookmarks
-    rows = list_bookmarks(get_connection(), page=page)
+    rows = list_bookmarks(get_connection(), user_id=current_user["id"], page=page)
     return [ArticleItem(**r) for r in rows]
 
 
@@ -1352,7 +1417,7 @@ def mark_feed_read_all(feed_id: int, current_user: dict = Depends(get_current_us
     conn = get_connection()
     if not get_feed_by_id(conn, feed_id):
         raise HTTPException(status_code=404, detail="Лента не найдена")
-    marked = mark_feed_all_read(conn, feed_id=feed_id)
+    marked = mark_feed_all_read(conn, feed_id=feed_id, user_id=current_user["id"])
     return {"marked": marked}
 
 

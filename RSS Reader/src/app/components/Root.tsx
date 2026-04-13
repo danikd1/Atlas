@@ -1,11 +1,13 @@
 import { Outlet, Link, useLocation, useNavigate, Navigate } from "react-router";
-import { Newspaper, Rss, Home, Search, X, Map, LogOut } from "lucide-react";
+import { Rss, Home, Search, X, Map, LogOut, User } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
+import { ProfileModal } from "./ProfileModal";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { ArticleSource, OutletCtx } from "../types";
 import { api, ApiArticleItem } from "../lib/api";
 import { authService } from "../lib/authService";
+import atlasLogo from "../assets/atlas-logo2.png";
 
 export function Root() {
   // ── Auth guard ────────────────────────────────────────────────
@@ -77,6 +79,8 @@ export function Root() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  const [showProfile, setShowProfile] = useState(false);
+
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     parseInt(localStorage.getItem("sidebarWidth") || "256")
   );
@@ -126,125 +130,135 @@ export function Root() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+      {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       <header className="bg-white border-b border-gray-200 z-10 flex-shrink-0">
-        <div className="px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <Link to="/" className="flex items-center gap-2 flex-shrink-0">
-              <Newspaper className="w-8 h-8 text-blue-600" />
-              <h1 className="text-xl font-semibold text-gray-900">RSS Reader</h1>
+        <div className="px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-4">
+
+          {/* Logo */}
+          <Link to="/" className="flex items-center gap-2 flex-shrink-0">
+            <img src={atlasLogo} alt="Atlas" className="w-10 h-10 object-contain" />
+            <span
+              className="text-xl font-black tracking-widest uppercase text-gray-900"
+              style={{ fontFamily: "'Inter', 'SF Pro Display', system-ui, sans-serif", letterSpacing: "0.18em" }}
+            >
+              Atlas
+            </span>
+          </Link>
+
+          {/* Nav — сразу после логотипа */}
+          <nav className="flex gap-1 flex-shrink-0">
+            <Link
+              to="/"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                location.pathname === "/" ? "bg-blue-100 text-blue-700" : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <Home className="w-4 h-4" />
+              Главная
             </Link>
+            <Link
+              to="/feeds"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                location.pathname === "/feeds" ? "bg-blue-100 text-blue-700" : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <Rss className="w-4 h-4" />
+              Мои Источники
+            </Link>
+            <Link
+              to="/map"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                location.pathname === "/map" ? "bg-blue-100 text-blue-700" : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <Map className="w-4 h-4" />
+              Карта
+            </Link>
+          </nav>
 
-            {/* Search */}
-            <div ref={searchRef} className="relative flex-1 max-w-md mx-6">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
-                  onKeyDown={(e) => e.key === "Escape" && clearSearch()}
-                  placeholder="Поиск по статьям..."
-                  className="w-full pl-9 pr-8 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
-                />
-                {searchQuery && (
-                  <button onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 hover:bg-gray-200 rounded">
-                    <X className="w-3.5 h-3.5 text-gray-400" />
-                  </button>
-                )}
-              </div>
-
-              {/* Dropdown */}
-              {searchOpen && (
-                <div className="absolute top-full left-0 mt-1 w-[520px] bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-[480px] overflow-y-auto">
-                  {searchLoading ? (
-                    <div className="px-4 py-3 text-sm text-gray-500">Поиск...</div>
-                  ) : searchResults.length === 0 ? (
-                    <div className="px-4 py-3 text-sm text-gray-500">Ничего не найдено</div>
-                  ) : (
-                    <ul>
-                      {searchResults.map((article) => (
-                        <li key={article.id}>
-                          <button
-                            onClick={() => handleSearchSelect(article)}
-                            className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-0"
-                          >
-                            <div className="flex items-start gap-2">
-                              {!article.is_read && (
-                                <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
-                              )}
-                              <div className="min-w-0">
-                                <p className={`text-sm font-medium leading-snug ${article.is_read ? "text-gray-500" : "text-gray-900"}`}>
-                                  {article.title ?? "Без заголовка"}
-                                </p>
-                                <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
-                                  <span>{article.source ?? "Источник неизвестен"}</span>
-                                  {article.published_at && (
-                                    <span>· {new Date(article.published_at).toLocaleDateString("ru-RU")}</span>
-                                  )}
-                                </p>
-                                {article.summary && (
-                                  <p className="text-xs text-gray-500 mt-1 line-clamp-2">{article.summary}</p>
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+          {/* Search — по центру, занимает оставшееся место */}
+          <div ref={searchRef} className="relative flex-1 mx-4">
+            <div className="relative max-w-md mx-auto">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
+                onKeyDown={(e) => e.key === "Escape" && clearSearch()}
+                placeholder="Поиск по статьям..."
+                className="w-full pl-9 pr-8 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
+              />
+              {searchQuery && (
+                <button onClick={clearSearch} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 hover:bg-gray-200 rounded">
+                  <X className="w-3.5 h-3.5 text-gray-400" />
+                </button>
               )}
             </div>
 
-            <nav className="flex gap-1 flex-shrink-0">
-              <Link
-                to="/"
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  location.pathname === "/"
-                    ? "bg-blue-100 text-blue-700"
-                    : "text-gray-700 hover:bg-gray-100"
-                }`}
-              >
-                <Home className="w-4 h-4" />
-                Главная
-              </Link>
-              <Link
-                to="/feeds"
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  location.pathname === "/feeds"
-                    ? "bg-blue-100 text-blue-700"
-                    : "text-gray-700 hover:bg-gray-100"
-                }`}
-              >
-                <Rss className="w-4 h-4" />
-                Мои Источники
-              </Link>
-              <Link
-                to="/map"
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  location.pathname === "/map"
-                    ? "bg-blue-100 text-blue-700"
-                    : "text-gray-700 hover:bg-gray-100"
-                }`}
-              >
-                <Map className="w-4 h-4" />
-                Карта
-              </Link>
-            </nav>
+            {/* Dropdown */}
+            {searchOpen && (
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-[520px] bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-[480px] overflow-y-auto">
+                {searchLoading ? (
+                  <div className="px-4 py-3 text-sm text-gray-500">Поиск...</div>
+                ) : searchResults.length === 0 ? (
+                  <div className="px-4 py-3 text-sm text-gray-500">Ничего не найдено</div>
+                ) : (
+                  <ul>
+                    {searchResults.map((article) => (
+                      <li key={article.id}>
+                        <button
+                          onClick={() => handleSearchSelect(article)}
+                          className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+                        >
+                          <div className="flex items-start gap-2">
+                            {!article.is_read && (
+                              <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" />
+                            )}
+                            <div className="min-w-0">
+                              <p className={`text-sm font-medium leading-snug ${article.is_read ? "text-gray-500" : "text-gray-900"}`}>
+                                {article.title ?? "Без заголовка"}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
+                                <span>{article.source ?? "Источник неизвестен"}</span>
+                                {article.published_at && (
+                                  <span>· {new Date(article.published_at).toLocaleDateString("ru-RU")}</span>
+                                )}
+                              </p>
+                              {article.summary && (
+                                <p className="text-xs text-gray-500 mt-1 line-clamp-2">{article.summary}</p>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
 
+          {/* Профиль + Выйти */}
+          <div className="flex items-center gap-1 flex-shrink-0">
             <button
-              onClick={() => {
-                authService.logout();
-                navigate("/login", { replace: true });
-              }}
-              className="ml-4 px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+              onClick={() => setShowProfile(true)}
+              className="px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+              title="Профиль"
+            >
+              <User className="w-4 h-4" />
+              <span className="hidden sm:inline">Профиль</span>
+            </button>
+            <button
+              onClick={() => { authService.logout(); navigate("/login", { replace: true }); }}
+              className="px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"
               title="Выйти"
             >
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:inline">Выйти</span>
             </button>
           </div>
+
         </div>
       </header>
 

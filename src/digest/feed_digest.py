@@ -45,6 +45,8 @@ class FeedDigestOptions:
     max_items_per_section: int = DIGEST_MAX_ITEMS_PER_SECTION
     max_articles_per_cluster: int = DIGEST_MAX_ARTICLES_PER_CLUSTER
     typical_chunks_per_cluster: int = DIGEST_TYPICAL_CHUNKS_PER_CLUSTER
+    gigachat_credentials: Optional[str] = None
+    gigachat_model: Optional[str] = None
 
 
 @dataclass
@@ -100,6 +102,7 @@ def build_digest_by_feeds(
     feed_ids: List[int],
     options: Optional[FeedDigestOptions] = None,
     collection_id: Optional[int] = None,
+    user_id: int = 0,
 ) -> FeedDigestResult:
     """Собирает дайджест по статьям из заданных лент. Если задан collection_id — использует статьи коллекции."""
     if options is None:
@@ -127,7 +130,7 @@ def build_digest_by_feeds(
         from src.tools.db_state import get_articles_for_bertopic_collection
         rows = get_articles_for_bertopic_collection(conn, collection_id, from_date=from_date, to_date=to_date, limit=300)
     else:
-        rows = get_articles_by_feed_ids(conn, feed_ids, from_date=from_date, to_date=to_date, limit=300)
+        rows = get_articles_by_feed_ids(conn, feed_ids, from_date=from_date, to_date=to_date, limit=300, user_id=user_id)
 
     if not rows:
         return empty_result
@@ -150,7 +153,7 @@ def build_digest_by_feeds(
     n_clusters = min(options.n_clusters, len(chunks))
     if n_clusters < 2:
         # Слишком мало статей — один "кластер", без кластеризации
-        client = create_gigachat_client()
+        client = create_gigachat_client(credentials=options.gigachat_credentials, model=options.gigachat_model)
         typical = chunks[:options.typical_chunks_per_cluster]
         llm_out = describe_and_classify_cluster_from_chunks(
             typical, language=options.language, client=client,
@@ -185,7 +188,7 @@ def build_digest_by_feeds(
         return empty_result
 
     cluster_ids = sorted(set(cwc.cluster_id for cwc in chunk_with_cluster))
-    client = create_gigachat_client()
+    client = create_gigachat_client(credentials=options.gigachat_credentials, model=options.gigachat_model)
 
     cluster_infos: List[ClusterInfo] = []
     for cid in cluster_ids:

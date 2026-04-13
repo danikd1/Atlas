@@ -88,7 +88,7 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
     return result[0]["summary_text"].strip()
 
 
-def create_gigachat_client() -> GigaChat:
+def create_gigachat_client(credentials: Optional[str] = None, model: Optional[str] = None) -> GigaChat:
     """
     Создает новый клиент GigaChat.
 
@@ -96,24 +96,34 @@ def create_gigachat_client() -> GigaChat:
     event loop. GigaChat при инициализации вызывает asyncio.get_event_loop()
     внутри — создаём loop вручную если его нет.
 
+    Args:
+        credentials: API-ключ GigaChat. Если не передан — поднимает ValueError.
+        model: Модель GigaChat. Если не передан — использует GIGACHAT_MODEL из конфига.
+
     Returns:
         Экземпляр GigaChat
 
     Raises:
+        ValueError: Если credentials не переданы
         RuntimeError: Если не удалось создать клиент
     """
+    if credentials is None:
+        raise ValueError("GigaChat не настроен. Укажите credentials в профиле.")
+
     import asyncio
     try:
         asyncio.get_event_loop()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
+    effective_model = model or GIGACHAT_MODEL
+
     try:
-        logger.info(f"Инициализация GigaChat клиента (модель: {GIGACHAT_MODEL})...")
+        logger.info(f"Инициализация GigaChat клиента (модель: {effective_model})...")
         client = GigaChat(
-            credentials=GIGACHAT_CREDENTIALS,
+            credentials=credentials,
             verify_ssl_certs=GIGACHAT_VERIFY_SSL,
-            model=GIGACHAT_MODEL,
+            model=effective_model,
         )
         logger.info("✅ GigaChat клиент инициализирован")
         return client

@@ -115,6 +115,17 @@ function handleUnauthorized(res: Response): void {
   }
 }
 
+// ─── GigaChat helpers ─────────────────────────────────────────────────────────
+
+function gigachatParams(): { gigachat_credentials?: string; gigachat_model?: string } {
+  const credentials = localStorage.getItem("gigachat_credentials");
+  const model = localStorage.getItem("gigachat_model");
+  return {
+    ...(credentials ? { gigachat_credentials: credentials } : {}),
+    ...(model ? { gigachat_model: model } : {}),
+  };
+}
+
 // ─── API client ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -361,7 +372,11 @@ export const api = {
   },
 
   async summarizeArticle(id: number): Promise<{ ai_summary: string | null; cached: boolean; error?: string }> {
-    const res = await fetch(`${API_BASE}/api/articles/${id}/summarize`, { method: "POST", headers: authHeaders() });
+    const res = await fetch(`${API_BASE}/api/articles/${id}/summarize`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(gigachatParams()),
+    });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Не удалось получить резюме");
     return res.json();
@@ -384,7 +399,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/api/feeds/qa`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify(params),
+      body: JSON.stringify({ ...params, ...gigachatParams() }),
     });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Ошибка QA");
@@ -423,7 +438,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/api/bertopic/run`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify(params ?? {}),
+      body: JSON.stringify({ ...(params ?? {}), ...gigachatParams() }),
     });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Ошибка запуска BERTopic");
@@ -490,10 +505,21 @@ export const api = {
     const res = await fetch(`${API_BASE}/api/feeds/digest`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify(params),
+      body: JSON.stringify({ ...params, ...gigachatParams() }),
     });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Ошибка дайджеста");
+    return res.json();
+  },
+
+  async gigachatTest(credentials: string, model?: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(`${API_BASE}/api/gigachat/test`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ credentials, ...(model ? { model } : {}) }),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Ошибка проверки GigaChat");
     return res.json();
   },
 
@@ -523,10 +549,23 @@ export const api = {
     return res.json();
   },
 
-  async getMe(): Promise<{ id: number; email: string }> {
+  async getMe(): Promise<{ id: number; email: string; created_at?: string }> {
     const res = await fetch(`${API_BASE}/api/auth/me`, { headers: authHeaders() });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Не удалось получить данные пользователя");
     return res.json();
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail ?? "Не удалось сменить пароль");
+    }
   },
 };

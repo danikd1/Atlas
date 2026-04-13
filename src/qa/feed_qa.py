@@ -32,6 +32,8 @@ class FeedQAOptions:
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
     language: str = "ru"
+    gigachat_credentials: Optional[str] = None
+    gigachat_model: Optional[str] = None
 
 
 @dataclass
@@ -65,6 +67,7 @@ def answer_question_by_feeds(
     feed_ids: List[int],
     options: Optional[FeedQAOptions] = None,
     collection_id: Optional[int] = None,
+    user_id: int = 0,
 ) -> FeedQAResult:
     """QA по статьям из заданных лент без RAG. Если задан collection_id — использует статьи коллекции."""
     if options is None:
@@ -82,6 +85,7 @@ def answer_question_by_feeds(
             from_date=options.from_date,
             to_date=options.to_date,
             limit=200,
+            user_id=user_id,
         )
 
     if not rows:
@@ -156,7 +160,7 @@ def answer_question_by_feeds(
             "Ответь по-русски. Если опираешься на фрагмент — упоминай его номер [N]."
         )
 
-    client = create_gigachat_client()
+    client = create_gigachat_client(credentials=options.gigachat_credentials, model=options.gigachat_model)
     try:
         result = client.chat({
             "messages": [

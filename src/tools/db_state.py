@@ -441,6 +441,42 @@ def ensure_tables(conn) -> None:
             """
         )
 
+        # МП.4: изоляция BERTopic по пользователю.
+        # collections уже имеет user_id TEXT (RAG-слой) — используем отдельное имя owner_id.
+        cur.execute(
+            f"""
+            ALTER TABLE {POSTGRES_TABLE_COLLECTIONS}
+                ADD COLUMN IF NOT EXISTS owner_id INT;
+            ALTER TABLE {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}
+                ADD COLUMN IF NOT EXISTS owner_id INT;
+            """
+        )
+        # Исправление PRIMARY KEY: добавляем owner_id в PK чтобы у разных пользователей
+        # могли быть независимые assignments для одной статьи+темы.
+        # Сначала очищаем старые строки без owner_id (данные до МП.4).
+        cur.execute(
+            f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} WHERE owner_id IS NULL;"
+        )
+        # Пересоздаём PK с owner_id, если owner_id ещё не входит в PK.
+        cur.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.key_column_usage
+                    WHERE table_name = '{POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}'
+                      AND constraint_name = '{POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}_pkey'
+                      AND column_name = 'owner_id'
+                ) THEN
+                    ALTER TABLE {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}
+                        DROP CONSTRAINT IF EXISTS {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}_pkey;
+                    ALTER TABLE {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}
+                        ADD PRIMARY KEY (link, topic_id, owner_id);
+                END IF;
+            END$$;
+            """
+        )
+
 
 def build_collection_key(selection: Dict[str, Optional[str]]) -> str:
     """
@@ -564,44 +600,60 @@ def update_collection_last_refreshed(conn, collection_id: int) -> None:
         )
 
 
-def list_collections(conn) -> List[CollectionRow]:
+def list_collections(conn, owner_id: Optional[int] = None) -> List[CollectionRow]:
     """
-    Возвращает список всех коллекций (для UI и API).
+    Возвращает список коллекций пользователя.
+    Если owner_id задан — только коллекции этого пользователя.
     Сортировка по updated_at по убыванию.
     """
     if conn is None:
         return []
+    owner_filter = "WHERE c.owner_id = %s" if owner_id is not None else ""
+    params = (owner_id,) if owner_id is not None else ()
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT c.id, c.name, c.description, c.discipline, c.ga, c.activity,
-                   c.collection_key, c.user_id, c.team_id,
+                   c.collection_key, c.user_id, c.team_id, c.owner_id,
                    c.created_at, c.updated_at, c.last_refreshed_at,
                    COUNT(DISTINCT r.link) AS article_count
             FROM {POSTGRES_TABLE_COLLECTIONS} c
             LEFT JOIN {POSTGRES_TABLE_RAG_DOCUMENTS} r ON r.collection_id = c.id
+            {owner_filter}
             GROUP BY c.id
             ORDER BY c.updated_at DESC NULLS LAST, c.id DESC;
             """,
+            params,
         )
         rows = cur.fetchall()
     return [dict(row) for row in rows]
 
 
-def get_collection_by_id(conn, collection_id: int) -> Optional[CollectionRow]:
-    """Возвращает одну коллекцию по id или None."""
+def get_collection_by_id(conn, collection_id: int, owner_id: Optional[int] = None) -> Optional[CollectionRow]:
+    """Возвращает одну коллекцию по id или None. Если owner_id задан — проверяет владельца."""
     if conn is None:
         return None
     with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
-                   created_at, updated_at, last_refreshed_at
-            FROM {POSTGRES_TABLE_COLLECTIONS}
-            WHERE id = %s;
-            """,
-            (collection_id,),
-        )
+        if owner_id is not None:
+            cur.execute(
+                f"""
+                SELECT id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
+                       owner_id, created_at, updated_at, last_refreshed_at
+                FROM {POSTGRES_TABLE_COLLECTIONS}
+                WHERE id = %s AND owner_id = %s;
+                """,
+                (collection_id, owner_id),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT id, name, description, discipline, ga, activity, collection_key, user_id, team_id,
+                       owner_id, created_at, updated_at, last_refreshed_at
+                FROM {POSTGRES_TABLE_COLLECTIONS}
+                WHERE id = %s;
+                """,
+                (collection_id,),
+            )
         row = cur.fetchone()
     return dict(row) if row else None
 
@@ -792,23 +844,35 @@ def load_articles_for_window(conn, hours_back: int):
     return pd.DataFrame(records)
 
 
-def delete_bertopic_collections(conn) -> int:
-    """Удаляет все BERTopic-коллекции (bertopic_topic_id IS NOT NULL). Возвращает кол-во удалённых."""
+def delete_bertopic_collections(conn, owner_id: Optional[int] = None) -> int:
+    """Удаляет BERTopic-коллекции пользователя (bertopic_topic_id IS NOT NULL). Возвращает кол-во удалённых."""
     if conn is None:
         return 0
     with conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {POSTGRES_TABLE_COLLECTIONS} WHERE bertopic_topic_id IS NOT NULL;"
-        )
+        if owner_id is not None:
+            cur.execute(
+                f"DELETE FROM {POSTGRES_TABLE_COLLECTIONS} WHERE bertopic_topic_id IS NOT NULL AND owner_id = %s;",
+                (owner_id,),
+            )
+        else:
+            cur.execute(
+                f"DELETE FROM {POSTGRES_TABLE_COLLECTIONS} WHERE bertopic_topic_id IS NOT NULL;"
+            )
         return cur.rowcount
 
 
-def delete_bertopic_assignments(conn) -> int:
-    """Удаляет все записи bertopic_assignments. Возвращает кол-во удалённых."""
+def delete_bertopic_assignments(conn, owner_id: Optional[int] = None) -> int:
+    """Удаляет записи bertopic_assignments пользователя. Возвращает кол-во удалённых."""
     if conn is None:
         return 0
     with conn.cursor() as cur:
-        cur.execute(f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS};")
+        if owner_id is not None:
+            cur.execute(
+                f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} WHERE owner_id = %s;",
+                (owner_id,),
+            )
+        else:
+            cur.execute(f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS};")
         return cur.rowcount
 
 
@@ -819,6 +883,7 @@ def create_bertopic_collection(
     model_version: str,
     description: Optional[str] = None,
     keywords: Optional[str] = None,
+    owner_id: Optional[int] = None,
 ) -> Optional[CollectionRow]:
     """
     Создаёт новую коллекцию для BERTopic-темы (без поиска существующей).
@@ -834,12 +899,12 @@ def create_bertopic_collection(
             f"""
             INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
                 (name, description, keywords, discipline, ga, activity, collection_key,
-                 bertopic_topic_id, model_version, updated_at, last_refreshed_at)
-            VALUES (%s, %s, %s, NULL, NULL, NULL, %s, %s, %s, NOW(), NOW())
+                 bertopic_topic_id, model_version, owner_id, updated_at, last_refreshed_at)
+            VALUES (%s, %s, %s, NULL, NULL, NULL, %s, %s, %s, %s, NOW(), NOW())
             RETURNING id, name, description, keywords, discipline, ga, activity, collection_key,
-                      user_id, team_id, created_at, updated_at, last_refreshed_at;
+                      user_id, team_id, owner_id, created_at, updated_at, last_refreshed_at;
             """,
-            (topic_name, description, keywords, key, topic_id, model_version),
+            (topic_name, description, keywords, key, topic_id, model_version, owner_id),
         )
         row = cur.fetchone()
     if not row:
@@ -851,6 +916,7 @@ def upsert_bertopic_assignments(
     conn,
     assignments: List[Dict],
     model_version: str,
+    owner_id: Optional[int] = None,
 ) -> int:
     """
     Вставляет или обновляет записи о принадлежности статей к BERTopic-темам.
@@ -869,14 +935,14 @@ def upsert_bertopic_assignments(
             cur.execute(
                 f"""
                 INSERT INTO {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS}
-                    (link, topic_id, probability, model_version, assigned_at)
-                VALUES (%s, %s, %s, %s, NOW())
-                ON CONFLICT (link, topic_id) DO UPDATE SET
+                    (link, topic_id, probability, model_version, owner_id, assigned_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (link, topic_id, owner_id) DO UPDATE SET
                     probability   = EXCLUDED.probability,
                     model_version = EXCLUDED.model_version,
                     assigned_at   = NOW();
                 """,
-                (link, topic_id, a.get("probability"), model_version),
+                (link, topic_id, a.get("probability"), model_version, owner_id),
             )
             count += 1
     return count
@@ -2005,6 +2071,7 @@ def get_articles_for_bertopic_collection(
     from_date=None,
     to_date=None,
     limit: int = 200,
+    user_id: int = 0,
 ) -> List[Dict]:
     """
     Возвращает статьи BERTopic-коллекции через bertopic_assignments + processed_articles.
@@ -2039,26 +2106,29 @@ def get_articles_for_bertopic_collection(
                 (ar.link IS NOT NULL) AS is_read,
                 (ab.link IS NOT NULL) AS is_saved
             FROM {POSTGRES_TABLE_COLLECTIONS} c
-            JOIN {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} ba ON ba.topic_id = c.bertopic_topic_id
+            JOIN {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} ba ON ba.topic_id = c.bertopic_topic_id AND ba.owner_id = c.owner_id
             JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = ba.link
-            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = 0
-            LEFT JOIN article_bookmarks ab ON ab.link = pa.link AND ab.user_id = 0
+            LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
+            LEFT JOIN article_bookmarks ab ON ab.link = pa.link AND ab.user_id = %s
             WHERE {where}
             ORDER BY pa.published_at DESC NULLS LAST
             LIMIT {limit};
             """,
-            params,
+            [user_id, user_id] + params,
         )
         return [dict(row) for row in cur.fetchall()]
 
 
-def get_bertopic_topics(conn) -> List[Dict]:
+def get_bertopic_topics(conn, owner_id: Optional[int] = None) -> List[Dict]:
     """
     Возвращает список BERTopic-тем (коллекций) с количеством статей.
     Используется для построения пузырьковой карты.
+    Если owner_id задан — возвращает только темы этого пользователя.
     """
     if conn is None:
         return []
+    owner_filter = "AND c.owner_id = %s" if owner_id is not None else ""
+    params = (owner_id,) if owner_id is not None else ()
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -2073,11 +2143,12 @@ def get_bertopic_topics(conn) -> List[Dict]:
                 COUNT(ba.link) AS article_count
             FROM {POSTGRES_TABLE_COLLECTIONS} c
             LEFT JOIN {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} ba
-                ON ba.topic_id = c.bertopic_topic_id
-            WHERE c.bertopic_topic_id IS NOT NULL
+                ON ba.topic_id = c.bertopic_topic_id AND (ba.owner_id = c.owner_id OR ba.owner_id IS NULL)
+            WHERE c.bertopic_topic_id IS NOT NULL {owner_filter}
             GROUP BY c.id
             ORDER BY article_count DESC;
-            """
+            """,
+            params,
         )
         return [dict(row) for row in cur.fetchall()]
 
@@ -2125,8 +2196,19 @@ def get_user_by_id(conn, user_id: int) -> Optional[dict]:
         return None
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, email FROM users WHERE id = %s;",
+            "SELECT id, email, password_hash, created_at FROM users WHERE id = %s;",
             (user_id,),
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def update_user_password(conn, user_id: int, new_password_hash: str) -> None:
+    """Обновляет хеш пароля пользователя."""
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s;",
+            (new_password_hash, user_id),
+        )
