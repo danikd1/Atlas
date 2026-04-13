@@ -1,9 +1,102 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useOutletContext } from "react-router";
 import { RefreshCw, Loader2, Map, AlertCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { BubbleMap, type TopicBubble } from "./BubbleMap";
 import type { OutletCtx } from "../types";
+
+function NeuralNetBg() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef   = useRef<number>(0);
+
+  const init = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const COUNT = 55;
+    const MAX_DIST = 180;
+
+    type Node = { x: number; y: number; vx: number; vy: number; phase: number };
+    const nodes: Node[] = Array.from({ length: COUNT }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.25,
+      vy: (Math.random() - 0.5) * 0.25,
+      phase: Math.random() * Math.PI * 2,
+    }));
+
+    const draw = (t: number) => {
+      ctx.clearRect(0, 0, W, H);
+
+      // обновляем позиции
+      for (const n of nodes) {
+        n.x += n.vx;
+        n.y += n.vy;
+        if (n.x < 0 || n.x > W) n.vx *= -1;
+        if (n.y < 0 || n.y > H) n.vy *= -1;
+      }
+
+      // рисуем линии между близкими узлами
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const dx   = nodes[i].x - nodes[j].x;
+          const dy   = nodes[i].y - nodes[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < MAX_DIST) {
+            const alpha = (1 - dist / MAX_DIST) * 0.12;
+            ctx.beginPath();
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(nodes[j].x, nodes[j].y);
+            ctx.strokeStyle = `rgba(100, 116, 139, ${alpha})`;
+            ctx.lineWidth = 0.8;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // рисуем узлы
+      for (const n of nodes) {
+        const pulse = 0.5 + 0.5 * Math.sin(t * 0.001 + n.phase);
+        const r     = 1.5 + pulse * 1.2;
+        const alpha = 0.15 + pulse * 0.2;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(100, 116, 139, ${alpha})`;
+        ctx.fill();
+      }
+
+      animRef.current = requestAnimationFrame(draw);
+    };
+
+    cancelAnimationFrame(animRef.current);
+    animRef.current = requestAnimationFrame(draw);
+  }, []);
+
+  useEffect(() => {
+    init();
+    const ro = new ResizeObserver(init);
+    if (canvasRef.current) ro.observe(canvasRef.current);
+    return () => {
+      cancelAnimationFrame(animRef.current);
+      ro.disconnect();
+    };
+  }, [init]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full pointer-events-none"
+      style={{ zIndex: 0 }}
+    />
+  );
+}
 
 type TaskStatus = "idle" | "pending" | "running" | "done" | "error";
 
@@ -159,6 +252,8 @@ export function TopicMapPage() {
         className="flex-1 relative overflow-hidden bg-gray-50"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Neural network background */}
+        <NeuralNetBg />
         {isLoadingTopics ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
@@ -184,11 +279,13 @@ export function TopicMapPage() {
             </button>
           </div>
         ) : (
-          <BubbleMap
-            topics={topics}
-            selectedId={selectedTopicId}
-            onSelect={handleSelectTopic}
-          />
+          <div className="absolute inset-0" style={{ zIndex: 1 }}>
+            <BubbleMap
+              topics={topics}
+              selectedId={selectedTopicId}
+              onSelect={handleSelectTopic}
+            />
+          </div>
         )}
       </div>
     </div>

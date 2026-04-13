@@ -85,9 +85,7 @@ export function BubbleMap({ topics, selectedId, onSelect }: BubbleMapProps) {
           const cx = x + 8;
           const cy = y + 8;
           const showText = r > 40;
-          // Шрифт пропорционален радиусу
           const fontSize = r < 60 ? Math.max(9, r / 6) : Math.max(10, Math.min(14, r / 6));
-          // Внутренний квадрат вписанный в круг
           const inner = r * Math.SQRT2 * 0.8;
           const displayName = stripQuotes(topic.name);
 
@@ -109,7 +107,6 @@ export function BubbleMap({ topics, selectedId, onSelect }: BubbleMapProps) {
                 stroke="white"
                 strokeWidth={isSelected ? 3 : 0}
               />
-              {/* Текст через foreignObject — CSS сам переносит слова */}
               {showText && (
                 <foreignObject
                   x={cx - inner / 2}

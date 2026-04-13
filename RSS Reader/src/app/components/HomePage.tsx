@@ -237,7 +237,21 @@ export function HomePage() {
   ).size;
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="relative -mx-4 sm:-mx-6 lg:-mx-8 -my-8 min-h-full">
+
+      {/* Square grid */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(90deg, #e2e8f0 1px, transparent 1px)`,
+          backgroundSize: "128px 128px",
+          opacity: 0.4,
+          zIndex: 0,
+        }}
+      />
+
+      {/* Content */}
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="text-center mb-12">
         <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
@@ -331,7 +345,7 @@ export function HomePage() {
               return (
                 <div
                   key={domain}
-                  className={`bg-white rounded-lg shadow-sm border-2 p-5 hover:shadow-md transition-all relative cursor-pointer flex flex-col ${
+                  className={`bg-white rounded-lg shadow-sm border-2 p-5 hover:shadow-lg hover:-translate-y-1 transition-all duration-200 relative cursor-pointer flex flex-col ${
                     isActive
                       ? "border-blue-500 ring-2 ring-blue-200"
                       : hasMultiple
@@ -490,6 +504,7 @@ export function HomePage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -1,505 +1,480 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { useOutletContext } from "react-router";
-import { Plus, ExternalLink, Eye, EyeOff, Rss, Layers, Link as LinkIcon, ArrowLeft, Loader2, AlertTriangle } from "lucide-react";
+import { Plus, ExternalLink, Eye, EyeOff, Rss, Layers, X, ArrowLeft, Loader2, AlertTriangle, LayoutGrid, Link as LinkIcon } from "lucide-react";
 import { RSSFeed, OutletCtx } from "../types";
 import { api, apiFeedToRSSFeed, FeedValidateResponse } from "../lib/api";
 
 function getDomain(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
+  try { return new URL(url).hostname; } catch { return url; }
 }
 
+function formatSourceName(domain: string): string {
+  const stripped = domain.replace(/^www\./, "");
+  const parts = stripped.split(".");
+  if (parts.length <= 2) return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+  return parts.slice(0, -1).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+}
+
+function commonNamePrefix(names: string[]): string | null {
+  if (names.length === 0) return null;
+  const words = names[0].split(" ");
+  const prefix: string[] = [];
+  for (const word of words) {
+    const candidate = [...prefix, word].join(" ").toLowerCase();
+    if (names.every(n => n.toLowerCase().startsWith(candidate))) prefix.push(word);
+    else break;
+  }
+  return prefix.length > 0 ? prefix.join(" ") : null;
+}
+
+function getSourceName(domain: string, feeds: RSSFeed[]): string {
+  if (feeds.length === 1) return feeds[0].title;
+  return commonNamePrefix(feeds.map(f => f.title)) ?? formatSourceName(domain);
+}
+
+// ── Modal: список лент домена ─────────────────────────────────────────────────
+function FeedsModal({
+  domain, feeds, onClose, onRemove, onToggle,
+}: {
+  domain: string;
+  feeds: RSSFeed[];
+  onClose: () => void;
+  onRemove: (f: RSSFeed) => void;
+  onToggle: (f: RSSFeed) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+      <div
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Layers className="w-4 h-4 text-blue-600" />
+            <span className="font-semibold text-gray-900">{getSourceName(domain, feeds)}</span>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{feeds.length} лент</span>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Feed list */}
+        <div className="overflow-y-auto flex-1 divide-y divide-gray-50">
+          {feeds.map(feed => (
+            <div key={feed.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
+              {feed.favicon_url
+                ? <img src={feed.favicon_url} alt="" className="w-5 h-5 rounded flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                : <Rss className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              }
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-gray-900 truncate">{feed.title}</p>
+                  {feed.hidden && <EyeOff className="w-3 h-3 text-amber-500 flex-shrink-0" />}
+                  {(feed.error_count ?? 0) > 0 && <AlertTriangle className="w-3 h-3 text-red-500 flex-shrink-0" />}
+                </div>
+                {feed.category && <p className="text-xs text-gray-400">{feed.category}</p>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <a
+                  href={feed.url} target="_blank" rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                  title={feed.url}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-gray-400" />
+                </a>
+                <button
+                  onClick={() => onToggle(feed)}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors"
+                  title={feed.hidden ? "Показать" : "Скрыть"}
+                >
+                  {feed.hidden
+                    ? <Eye className="w-3.5 h-3.5 text-gray-400" />
+                    : <EyeOff className="w-3.5 h-3.5 text-gray-400" />
+                  }
+                </button>
+                <button
+                  onClick={() => onRemove(feed)}
+                  className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Отписаться"
+                >
+                  <X className="w-3.5 h-3.5 text-gray-400 hover:text-red-500" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Stat card ─────────────────────────────────────────────────────────────────
+function StatCard({ label, value, icon }: { label: string; value: number | string; icon: ReactNode }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 flex items-center gap-4">
+      <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600 flex-shrink-0">
+        {icon}
+      </div>
+      <div>
+        <p className="text-2xl font-bold text-gray-900 leading-none">{value}</p>
+        <p className="text-xs text-gray-500 mt-1">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Source card ───────────────────────────────────────────────────────────────
+function SourceCard({
+  domain, feeds, onClick, onRemove, onToggle,
+}: {
+  domain: string;
+  feeds: RSSFeed[];
+  onClick: () => void;
+  onRemove: (f: RSSFeed) => void;
+  onToggle: (f: RSSFeed) => void;
+}) {
+  const first = feeds[0];
+  const sourceName = getSourceName(domain, feeds);
+  const isHidden = feeds.every(f => f.hidden);
+  const someHidden = feeds.some(f => f.hidden) && !isHidden;
+  const unread = feeds.reduce((s, f) => s + (f.unread_count ?? 0), 0);
+  const hasError = feeds.some(f => (f.error_count ?? 0) > 0);
+  const categories = Array.from(new Set(feeds.map(f => f.category).filter(Boolean)));
+
+  return (
+    <div
+      onClick={onClick}
+      className={`bg-white rounded-2xl border overflow-hidden cursor-pointer hover:shadow-xl hover:-translate-y-1 transition-all duration-200 ${
+        isHidden ? "border-gray-200 opacity-60" : "border-gray-100 hover:border-blue-200"
+      }`}
+    >
+      {/* Цветная полоска сверху */}
+      <div className={`h-1 w-full ${isHidden ? "bg-gray-200" : "bg-blue-400"}`} />
+
+      <div className="p-5 flex flex-col gap-4">
+        {/* Top row */}
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center flex-shrink-0 shadow-sm">
+            {first.favicon_url
+              ? <img src={first.favicon_url} alt="" className="w-7 h-7 rounded-lg" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+              : <Rss className="w-5 h-5 text-gray-400" />
+            }
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-gray-900 truncate">{sourceName}</h3>
+              {unread > 0 && (
+                <span className="text-xs font-bold bg-blue-500 text-white px-1.5 py-0.5 rounded-full leading-none">{unread}</span>
+              )}
+              {hasError && <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />}
+            </div>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-xs text-gray-400 flex items-center gap-1">
+                {feeds.length > 1 ? <Layers className="w-3 h-3" /> : <Rss className="w-3 h-3" />}
+                {feeds.length > 1 ? `${feeds.length} лент` : "1 лента"}
+              </span>
+              {isHidden && <span className="text-xs text-amber-500 flex items-center gap-1"><EyeOff className="w-3 h-3" />скрыто</span>}
+              {someHidden && <span className="text-xs text-amber-400">часть скрыта</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Categories */}
+        {categories.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {categories.slice(0, 3).map(cat => (
+              <span key={cat} className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-full">{cat}</span>
+            ))}
+            {categories.length > 3 && (
+              <span className="text-xs text-gray-400 bg-gray-50 px-2.5 py-1 rounded-full">+{categories.length - 3}</span>
+            )}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center gap-2 pt-3 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+          <button
+            onClick={() => onToggle(first)}
+            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+              isHidden
+                ? "text-amber-600 hover:bg-amber-50"
+                : "text-gray-500 hover:bg-gray-100"
+            }`}
+          >
+            {isHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            {isHidden ? "Показать" : "Скрыть"}
+          </button>
+          <button
+            onClick={() => onRemove(first)}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors ml-auto"
+          >
+            <X className="w-3.5 h-3.5" />
+            Отписаться
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── FeedsPage ─────────────────────────────────────────────────────────────────
 export function FeedsPage() {
   const ctx = useOutletContext<OutletCtx | undefined>();
   const setSelectedSource = ctx?.setSelectedSource;
-  const selectFeed = (feed: RSSFeed) => {
-    if (!setSelectedSource) return;
-    setSelectedSource({
-      kind: "feed",
-      feedId: feed.id,
-      feedIds: feed.feedIds,
-      title: feed.title,
-      favicon_url: feed.favicon_url,
-    });
-  };
-  const [feeds, setFeeds] = useState<RSSFeed[]>([]);
 
-  // Форма: шаг 1 — ввод URL
+  const [feeds, setFeeds] = useState<RSSFeed[]>([]);
+  const [modalDomain, setModalDomain] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+
   const [urlInput, setUrlInput] = useState("");
   const [isValidating, setIsValidating] = useState(false);
   const [validateError, setValidateError] = useState("");
-
-  // Форма: шаг 2 — превью и подтверждение
   const [previewData, setPreviewData] = useState<FeedValidateResponse | null>(null);
   const [previewName, setPreviewName] = useState("");
   const [previewCategory, setPreviewCategory] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
-  useEffect(() => {
-    loadFeeds();
-  }, []);
+  useEffect(() => { loadFeeds(); }, []);
 
   const loadFeeds = async () => {
     try {
-      // include_hidden=true — страница управления должна показывать и скрытые
-      // ленты, чтобы их можно было вернуть обратно.
       const apiFeeds = await api.getFeeds(true);
       setFeeds(apiFeeds.map(apiFeedToRSSFeed));
-    } catch (e) {
-      console.error("Ошибка загрузки лент:", e);
-    }
+    } catch (e) { console.error(e); }
   };
 
   const resetForm = () => {
-    setShowAddForm(false);
-    setUrlInput("");
-    setValidateError("");
-    setPreviewData(null);
-    setPreviewName("");
-    setPreviewCategory("");
+    setShowAddForm(false); setUrlInput(""); setValidateError("");
+    setPreviewData(null); setPreviewName(""); setPreviewCategory("");
   };
 
-  // Шаг 1: валидация URL
   const handleValidate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!urlInput.trim()) return;
-    setIsValidating(true);
-    setValidateError("");
+    setIsValidating(true); setValidateError("");
     try {
       const result = await api.validateFeed(urlInput.trim());
-      if (!result.valid) {
-        setValidateError(result.error ?? "Не удалось проверить ленту. Проверьте URL.");
-        return;
-      }
-      setPreviewData(result);
-      setPreviewName(result.name ?? "");
-      setPreviewCategory(result.suggested_category ?? "");
-    } catch {
-      setValidateError("Ошибка соединения. Проверьте что бэкенд запущен.");
-    } finally {
-      setIsValidating(false);
-    }
+      if (!result.valid) { setValidateError(result.error ?? "Не удалось проверить ленту."); return; }
+      setPreviewData(result); setPreviewName(result.name ?? ""); setPreviewCategory(result.suggested_category ?? "");
+    } catch { setValidateError("Ошибка соединения."); }
+    finally { setIsValidating(false); }
   };
 
-  // Шаг 2: подтверждение и сохранение
   const handleConfirmAdd = async () => {
     if (!previewData || !previewName.trim()) return;
     setIsAdding(true);
     try {
-      await api.addFeed({
-        url: urlInput.trim(),
-        name: previewName.trim(),
-        favicon_url: previewData.favicon_url,
-        description: previewData.description,
-        category: previewCategory.trim() || null,
-      });
+      await api.addFeed({ url: urlInput.trim(), name: previewName.trim(), favicon_url: previewData.favicon_url, description: previewData.description, category: previewCategory.trim() || null });
       await loadFeeds();
       window.dispatchEvent(new CustomEvent("feeds-updated"));
       resetForm();
-    } catch {
-      setValidateError("Ошибка при добавлении ленты.");
-      setIsAdding(false);
-    }
+    } catch { setValidateError("Ошибка при добавлении."); setIsAdding(false); }
   };
 
   const handleRemoveFeed = async (feed: RSSFeed) => {
-    if (!confirm("Вы уверены, что хотите отписаться?")) return;
+    if (!confirm("Отписаться?")) return;
     const domain = getDomain(feed.url);
-    const sameDomain = feeds.filter((f) => getDomain(f.url) === domain);
-    // Удаляем все ленты домена если их больше одной (группа), иначе только текущую
-    const toRemove = sameDomain.length > 1 ? sameDomain : [feed];
-    try {
-      await Promise.all(toRemove.map((f) => api.deleteFeed(parseInt(f.id))));
-      await loadFeeds();
-      window.dispatchEvent(new CustomEvent("feeds-updated"));
-    } catch (e) {
-      console.error("Ошибка при удалении:", e);
-    }
+    const toRemove = feeds.filter(f => getDomain(f.url) === domain);
+    await Promise.all(toRemove.map(f => api.deleteFeed(parseInt(f.id))));
+    await loadFeeds();
+    window.dispatchEvent(new CustomEvent("feeds-updated"));
+    setModalDomain(null);
   };
 
   const handleToggleVisibility = async (feed: RSSFeed) => {
     const domain = getDomain(feed.url);
-    const sameDomain = feeds.filter((f) => getDomain(f.url) === domain);
-    const toUpdate = sameDomain.length > 1 ? sameDomain : [feed];
+    const toUpdate = feeds.filter(f => getDomain(f.url) === domain);
     const newHidden = !feed.hidden;
-    try {
-      await Promise.all(toUpdate.map((f) => api.patchFeed(parseInt(f.id), { hidden: newHidden })));
-      await loadFeeds();
-      window.dispatchEvent(new CustomEvent("feeds-updated"));
-    } catch (e) {
-      console.error("Ошибка при обновлении:", e);
-    }
+    await Promise.all(toUpdate.map(f => api.patchFeed(parseInt(f.id), { hidden: newHidden })));
+    await loadFeeds();
+    window.dispatchEvent(new CustomEvent("feeds-updated"));
   };
 
-  // Группировка по домену: 2+ лент → группа, 1 лента → отдельная карточка
-  const feedsByDomain = new Map<string, RSSFeed[]>();
-  feeds.forEach((feed) => {
-    const domain = getDomain(feed.url);
-    if (!feedsByDomain.has(domain)) feedsByDomain.set(domain, []);
-    feedsByDomain.get(domain)!.push(feed);
-  });
+  // Одиночные обработчики для модалки — действуют только на конкретную ленту
+  const handleRemoveSingleFeed = async (feed: RSSFeed) => {
+    if (!confirm(`Отписаться от "${feed.title}"?`)) return;
+    await api.deleteFeed(parseInt(feed.id));
+    await loadFeeds();
+    window.dispatchEvent(new CustomEvent("feeds-updated"));
+    // закрыть модалку если лент не осталось
+    const remaining = feeds.filter(f => f.id !== feed.id && getDomain(f.url) === getDomain(feed.url));
+    if (remaining.length === 0) setModalDomain(null);
+  };
 
-  const sourceGroups: Array<{ domain: string; feeds: RSSFeed[] }> = [];
-  const standaloneFeeds: RSSFeed[] = [];
-  feedsByDomain.forEach((domainFeeds, domain) => {
-    if (domainFeeds.length > 1) sourceGroups.push({ domain, feeds: domainFeeds });
-    else standaloneFeeds.push(domainFeeds[0]);
+  const handleToggleSingleFeed = async (feed: RSSFeed) => {
+    await api.patchFeed(parseInt(feed.id), { hidden: !feed.hidden });
+    await loadFeeds();
+    window.dispatchEvent(new CustomEvent("feeds-updated"));
+  };
+
+  // Группировка по домену
+  const byDomain = new Map<string, RSSFeed[]>();
+  feeds.forEach(f => {
+    const d = getDomain(f.url);
+    if (!byDomain.has(d)) byDomain.set(d, []);
+    byDomain.get(d)!.push(f);
   });
+  const domains = Array.from(byDomain.entries());
+
+  // Статистика
+  const totalDomains = domains.length;
+  const totalFeeds = feeds.length;
+  const hiddenCount = domains.filter(([, fs]) => fs.some(f => f.hidden)).length;
+  const categories = new Set(feeds.map(f => f.category).filter(Boolean)).size;
+
+  const modalFeeds = modalDomain ? (byDomain.get(modalDomain) ?? []) : [];
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-5xl mx-auto">
+
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-semibold text-gray-900">Мои источники</h2>
+        <h2 className="text-2xl font-bold text-gray-900">Мои источники</h2>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
         >
           <Plus className="w-4 h-4" />
           Добавить источник
         </button>
       </div>
 
+      {/* Stats */}
+      {feeds.length > 0 && (
+        <div className="grid grid-cols-4 gap-3 mb-6">
+          <StatCard label="Источников" value={totalDomains} icon={<LayoutGrid className="w-5 h-5" />} />
+          <StatCard label="Лент" value={totalFeeds} icon={<Rss className="w-5 h-5" />} />
+          <StatCard label="Скрытых" value={hiddenCount} icon={<EyeOff className="w-5 h-5" />} />
+          <StatCard label="Категорий" value={categories} icon={<Layers className="w-5 h-5" />} />
+        </div>
+      )}
+
+      {/* Add form */}
       {showAddForm && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
           {!previewData ? (
-            // Шаг 1: ввод URL
             <>
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Добавить источник по URL</h3>
-              <form onSubmit={handleValidate} className="space-y-4">
-                <div>
-                  <label htmlFor="url" className="block text-sm font-medium text-gray-700 mb-1">
-                    URL RSS-ленты
-                  </label>
-                  <input
-                    type="url"
-                    id="url"
-                    value={urlInput}
-                    onChange={(e) => { setUrlInput(e.target.value); setValidateError(""); }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="https://example.com/feed.xml"
-                    required
-                  />
-                  {validateError && (
-                    <p className="mt-1 text-sm text-red-600">{validateError}</p>
-                  )}
-                </div>
-                <div className="flex gap-3">
-                  <button
-                    type="submit"
-                    disabled={isValidating}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-60"
-                  >
-                    {isValidating && <Loader2 className="w-4 h-4 animate-spin" />}
-                    Проверить
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetForm}
-                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
-                  >
-                    Отмена
-                  </button>
-                </div>
+              <h3 className="text-base font-semibold text-gray-900 mb-4">Добавить по URL</h3>
+              <form onSubmit={handleValidate} className="flex gap-3">
+                <input
+                  type="url" value={urlInput}
+                  onChange={e => { setUrlInput(e.target.value); setValidateError(""); }}
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="https://example.com/feed.xml"
+                  required
+                />
+                <button type="submit" disabled={isValidating}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm disabled:opacity-60"
+                >
+                  {isValidating && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Проверить
+                </button>
+                <button type="button" onClick={resetForm}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm"
+                >
+                  Отмена
+                </button>
               </form>
+              {validateError && <p className="mt-2 text-sm text-red-600">{validateError}</p>}
             </>
           ) : (
-            // Шаг 2: превью и подтверждение
             <>
               <div className="flex items-center gap-2 mb-4">
-                <button
-                  onClick={() => { setPreviewData(null); setValidateError(""); }}
-                  className="p-1 hover:bg-gray-100 rounded transition-colors"
-                >
+                <button onClick={() => { setPreviewData(null); setValidateError(""); }} className="p-1 hover:bg-gray-100 rounded transition-colors">
                   <ArrowLeft className="w-4 h-4 text-gray-500" />
                 </button>
-                <h3 className="text-lg font-medium text-gray-900">Подтвердите добавление</h3>
+                <h3 className="text-base font-semibold text-gray-900">Подтвердите добавление</h3>
               </div>
-
-              <div className="flex items-start gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
-                {previewData.favicon_url ? (
-                  <img src={previewData.favicon_url} alt="" className="w-8 h-8 rounded flex-shrink-0" />
-                ) : (
-                  <Rss className="w-8 h-8 text-gray-400 flex-shrink-0" />
-                )}
+              <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg mb-4">
+                {previewData.favicon_url
+                  ? <img src={previewData.favicon_url} alt="" className="w-7 h-7 rounded flex-shrink-0" />
+                  : <Rss className="w-7 h-7 text-gray-400 flex-shrink-0" />
+                }
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-gray-500 truncate mb-1">{urlInput}</p>
-                  {previewData.description && (
-                    <p className="text-sm text-gray-600 line-clamp-2">{previewData.description}</p>
-                  )}
+                  <a href={urlInput} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline truncate">
+                    <LinkIcon className="w-3 h-3" />{urlInput}
+                  </a>
+                  {previewData.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{previewData.description}</p>}
                 </div>
               </div>
-
-              <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 mb-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Название (можно изменить)
-                  </label>
-                  <input
-                    type="text"
-                    value={previewName}
-                    onChange={(e) => setPreviewName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Название</label>
+                  <input type="text" value={previewName} onChange={e => setPreviewName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Категория (можно изменить)
-                  </label>
-                  <input
-                    type="text"
-                    value={previewCategory}
-                    onChange={(e) => setPreviewCategory(e.target.value)}
-                    placeholder="Например: Technology, Design, News"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Категория</label>
+                  <input type="text" value={previewCategory} onChange={e => setPreviewCategory(e.target.value)}
+                    placeholder="Technology, Design…"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
-                {validateError && (
-                  <p className="text-sm text-red-600">{validateError}</p>
-                )}
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleConfirmAdd}
-                    disabled={isAdding || !previewName.trim()}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:opacity-60"
-                  >
-                    {isAdding && <Loader2 className="w-4 h-4 animate-spin" />}
-                    Добавить
-                  </button>
-                  <button
-                    onClick={resetForm}
-                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
-                  >
-                    Отмена
-                  </button>
-                </div>
+              </div>
+              {validateError && <p className="mb-3 text-sm text-red-600">{validateError}</p>}
+              <div className="flex gap-3">
+                <button onClick={handleConfirmAdd} disabled={isAdding || !previewName.trim()}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm disabled:opacity-60"
+                >
+                  {isAdding && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Добавить
+                </button>
+                <button onClick={resetForm} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm">
+                  Отмена
+                </button>
               </div>
             </>
           )}
         </div>
       )}
 
-      <div className="space-y-3">
-        {feeds.length === 0 ? (
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border-2 border-dashed border-blue-300 p-12 text-center">
-            <Rss className="w-16 h-16 text-blue-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Нет источников</h3>
-            <p className="text-gray-600 mb-4">Добавьте первый RSS-источник для начала!</p>
-            <button
-              onClick={() => setShowAddForm(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Добавить источник
-            </button>
-          </div>
-        ) : (
-          <>
-            {/* Группы: 2+ ленты с одного домена */}
-            {sourceGroups.map(({ domain, feeds: groupFeeds }) => {
-              const firstFeed = groupFeeds[0];
-              const isHidden = firstFeed.hidden;
-              const groupUnread = groupFeeds.reduce((sum, f) => sum + (f.unread_count ?? 0), 0);
-              const groupHasErrors = groupFeeds.some((f) => (f.error_count ?? 0) > 0);
+      {/* Empty state */}
+      {feeds.length === 0 ? (
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl border-2 border-dashed border-blue-200 p-16 text-center">
+          <Rss className="w-14 h-14 text-blue-300 mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-gray-800 mb-2">Нет источников</h3>
+          <p className="text-sm text-gray-500 mb-5">Добавьте первый RSS-источник для начала</p>
+          <button onClick={() => setShowAddForm(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+          >
+            <Plus className="w-4 h-4" />Добавить источник
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {domains.map(([domain, domainFeeds]) => (
+            <SourceCard
+              key={domain}
+              domain={domain}
+              feeds={domainFeeds}
+              onClick={() => {
+                if (domainFeeds.length === 1 && setSelectedSource) {
+                  const f = domainFeeds[0];
+                  setSelectedSource({ kind: "feed", feedId: f.id, feedIds: f.feedIds, title: f.title, favicon_url: f.favicon_url });
+                } else {
+                  setModalDomain(domain);
+                }
+              }}
+              onRemove={handleRemoveFeed}
+              onToggle={handleToggleVisibility}
+            />
+          ))}
+        </div>
+      )}
 
-              return (
-                <div
-                  key={domain}
-                  onClick={() => selectFeed(firstFeed)}
-                  className={`relative overflow-hidden rounded-xl border-2 transition-all hover:shadow-lg cursor-pointer ${
-                    isHidden
-                      ? "bg-gray-50 border-gray-300 opacity-75"
-                      : "bg-gradient-to-br from-blue-50 via-white to-purple-50 border-blue-200 hover:border-blue-300"
-                  }`}
-                >
-                  <div className={`px-5 py-3 border-b ${isHidden ? "bg-gray-100 border-gray-200" : "bg-gradient-to-r from-blue-100 to-purple-100 border-blue-200"}`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-lg ${isHidden ? "bg-gray-300" : "bg-blue-600"} text-white`}>
-                          <Layers className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-semibold text-gray-900 text-base">{domain}</h3>
-                            {groupUnread > 0 && (
-                              <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-bold bg-blue-600 text-white rounded-full">
-                                {groupUnread}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 text-xs text-gray-600">
-                            <span className="flex items-center gap-1">
-                              <Rss className="w-3 h-3" />
-                              {groupFeeds.length} {groupFeeds.length < 5 ? "ленты" : "лент"}
-                            </span>
-                            {groupHasErrors && (
-                              <span className="flex items-center gap-1 text-red-600 font-medium">
-                                <AlertTriangle className="w-3 h-3" />
-                                Ошибка сбора
-                              </span>
-                            )}
-                            {isHidden && (
-                              <span className="flex items-center gap-1 text-amber-600 font-medium">
-                                <EyeOff className="w-3 h-3" />
-                                Скрыто
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRemoveFeed(firstFeed); }}
-                          className="px-3 py-1.5 text-xs font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
-                        >
-                          Отписаться
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleToggleVisibility(firstFeed); }}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                            isHidden ? "text-green-700 bg-green-100 hover:bg-green-200" : "text-gray-700 bg-gray-200 hover:bg-gray-300"
-                          }`}
-                        >
-                          {isHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                          {isHidden ? "Показать" : "Скрыть"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="px-5 py-3 space-y-2">
-                    {groupFeeds.map((feed) => (
-                      <div
-                        key={feed.id}
-                        className={`flex items-start gap-3 p-3 rounded-lg transition-colors ${
-                          isHidden ? "bg-white/50" : "bg-white hover:bg-blue-50/50"
-                        }`}
-                      >
-                        <div className={`mt-0.5 w-1 h-full rounded-full ${isHidden ? "bg-gray-300" : "bg-gradient-to-b from-blue-400 to-purple-400"}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-0.5">
-                            <h4 className="font-medium text-gray-900 text-sm">{feed.title}</h4>
-                            {feed.category && (
-                              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded whitespace-nowrap flex-shrink-0">{feed.category}</span>
-                            )}
-                          </div>
-                          {feed.description && (
-                            <p className="text-xs text-gray-500 mb-1 line-clamp-1">{feed.description}</p>
-                          )}
-                          <a
-                            href={feed.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 hover:underline"
-                          >
-                            <LinkIcon className="w-3 h-3" />
-                            <span className="truncate max-w-md">{feed.url}</span>
-                          </a>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Одиночные ленты */}
-            {standaloneFeeds.map((feed) => {
-              const isHidden = feed.hidden;
-
-              return (
-                <div
-                  key={feed.id}
-                  onClick={() => selectFeed(feed)}
-                  className={`relative overflow-hidden rounded-xl border-2 transition-all hover:shadow-lg cursor-pointer ${
-                    isHidden
-                      ? "bg-gray-50 border-gray-300 opacity-75"
-                      : "bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-emerald-200 hover:border-emerald-300"
-                  }`}
-                >
-                  <div className="p-5">
-                    <div className="flex items-start gap-4">
-                      <div className={`p-2 rounded-xl flex-shrink-0 ${isHidden ? "bg-gray-200" : "bg-gradient-to-br from-emerald-500 to-teal-500"}`}>
-                        {feed.favicon_url ? (
-                          <img src={feed.favicon_url} alt="" className="w-6 h-6 rounded" />
-                        ) : (
-                          <Rss className={`w-6 h-6 ${isHidden ? "text-gray-400" : "text-white"}`} />
-                        )}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h3 className="font-semibold text-gray-900 text-base">{feed.title}</h3>
-                              {(feed.unread_count ?? 0) > 0 && (
-                                <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-bold bg-emerald-500 text-white rounded-full">
-                                  {feed.unread_count}
-                                </span>
-                              )}
-                            </div>
-                            {(feed.error_count ?? 0) > 0 && (
-                              <span className="inline-flex items-center gap-1 text-xs text-red-600 font-medium mb-1" title={feed.last_error ?? undefined}>
-                                <AlertTriangle className="w-3 h-3" />
-                                Ошибка сбора — наведите для деталей
-                              </span>
-                            )}
-                            {isHidden && (
-                              <span className="inline-flex items-center gap-1 text-xs text-amber-600 font-medium mb-2">
-                                <EyeOff className="w-3 h-3" />
-                                Скрыто из меню
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleRemoveFeed(feed); }}
-                              className="px-3 py-1.5 text-xs font-medium text-red-700 bg-red-100 rounded-lg hover:bg-red-200 transition-colors"
-                            >
-                              Отписаться
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleToggleVisibility(feed); }}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                                isHidden ? "text-green-700 bg-green-100 hover:bg-green-200" : "text-gray-700 bg-gray-200 hover:bg-gray-300"
-                              }`}
-                            >
-                              {isHidden ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                              {isHidden ? "Показать" : "Скрыть"}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="flex items-start justify-between gap-2 mt-1">
-                          {feed.description ? (
-                            <p className="text-xs text-gray-500 line-clamp-2">{feed.description}</p>
-                          ) : <span />}
-                          {feed.category && (
-                            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded whitespace-nowrap flex-shrink-0">{feed.category}</span>
-                          )}
-                        </div>
-                        <a
-                          href={feed.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 hover:underline"
-                        >
-                          <ExternalLink className="w-3 h-3" />
-                          <span className="truncate max-w-md">{feed.url}</span>
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </>
-        )}
-      </div>
+      {/* Modal */}
+      {modalDomain && (
+        <FeedsModal
+          domain={modalDomain}
+          feeds={modalFeeds}
+          onClose={() => setModalDomain(null)}
+          onRemove={handleRemoveSingleFeed}
+          onToggle={handleToggleSingleFeed}
+        />
+      )}
     </div>
   );
 }
