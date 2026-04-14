@@ -480,7 +480,7 @@ def rss_status(current_user: dict = Depends(get_current_user)):
         "last_new_articles": _scheduler_state["last_new_articles"],
         "interval_hours": COLLECT_INTERVAL_HOURS,
         "text_extraction_running": _extraction_state["running"],
-        "text_extraction_pending": get_pending_count(conn),
+        "text_extraction_pending": get_pending_count(conn, user_id=current_user["id"]),
         "rag_indexing": _indexer_state["running"],
         "rag_paused": _indexer_state["paused"],
         "rag_indexed": rag["indexed"],

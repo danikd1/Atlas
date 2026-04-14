@@ -62,14 +62,23 @@ def _summarize_with_bart_auto(title: str, full_text: str) -> str:
     return result[0]["summary_text"].strip()
 
 
-def get_pending_count(conn) -> int:
-    """Сколько статей ожидают извлечения full_text."""
+def get_pending_count(conn, user_id: int = None) -> int:
+    """Сколько статей ожидают извлечения full_text.
+    Если user_id задан — только по лентам этого пользователя."""
     if conn is None:
         return 0
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM processed_articles WHERE full_text IS NULL AND full_text_error = FALSE;"
-        )
+        if user_id is not None:
+            cur.execute(
+                """SELECT COUNT(*) FROM processed_articles pa
+                   JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+                   WHERE pa.full_text IS NULL AND pa.full_text_error = FALSE;""",
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT COUNT(*) FROM processed_articles WHERE full_text IS NULL AND full_text_error = FALSE;"
+            )
         row = cur.fetchone()
         return int(row[0]) if row else 0
 
