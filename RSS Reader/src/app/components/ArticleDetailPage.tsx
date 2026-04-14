@@ -8,6 +8,18 @@ import { translationCache } from "../lib/translationCache";
 import { formatDistanceToNow } from "date-fns";
 import { ru } from "date-fns/locale/ru";
 
+function formatFullText(text: string): string {
+  if (/<[a-z][\s\S]*>/i.test(text)) {
+    // HTML from trafilatura: strip the first <h1> (it repeats the article title)
+    return text.replace(/<h1[^>]*>[\s\S]*?<\/h1>/i, "");
+  }
+  // Plain text: wrap paragraphs in <p> tags
+  return text
+    .split(/\n\n+/)
+    .map((p) => `<p>${p.trim()}</p>`)
+    .join("");
+}
+
 export function ArticleDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -177,7 +189,7 @@ export function ArticleDetailPage() {
         {displayFullText ? (
           <div
             className="prose prose-gray max-w-none prose-a:text-blue-600 prose-img:rounded-lg"
-            dangerouslySetInnerHTML={{ __html: displayFullText }}
+            dangerouslySetInnerHTML={{ __html: formatFullText(displayFullText) }}
           />
         ) : (
           <div className="text-gray-700">

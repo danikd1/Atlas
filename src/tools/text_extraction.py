@@ -69,9 +69,10 @@ def extract_full_text(
             if downloaded:
                 text = trafilatura.extract(
                     downloaded,
-                    include_links=False,
-                    include_images=False,
-                    include_tables=False,
+                    output_format="html",
+                    include_links=True,
+                    include_images=True,
+                    include_tables=True,
                     favor_recall=True,
                     deduplicate=True,
                 )
@@ -90,9 +91,10 @@ def extract_full_text(
                 if downloaded:
                     text = trafilatura.extract(
                         downloaded,
-                        include_links=False,
-                        include_images=False,
-                        include_tables=False,
+                        output_format="html",
+                        include_links=True,
+                        include_images=True,
+                        include_tables=True,
                         favor_recall=True,
                         deduplicate=True,
                     )

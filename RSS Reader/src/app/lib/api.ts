@@ -147,7 +147,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/api/feeds/validate`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, ...gigachatParams() }),
     });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Ошибка при проверке ленты");
@@ -325,11 +325,54 @@ export const api = {
     is_running: boolean;
     last_new_articles: number | null;
     interval_hours: number;
+    text_extraction_running: boolean;
+    text_extraction_pending: number;
+    rag_indexing: boolean;
+    rag_paused: boolean;
+    rag_indexed: number;
+    rag_pending: number;
   }> {
     const res = await fetch(`${API_BASE}/api/rss/status`, { headers: authHeaders() });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Не удалось получить статус");
     return res.json();
+  },
+
+  async startExtractionWorker(): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/rss/extract`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ full_scan: false }),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Не удалось запустить воркер");
+  },
+
+  async startRagIndexer(): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/rss/index`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Не удалось запустить индексацию");
+  },
+
+  async pauseRagIndexer(): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/rss/index/pause`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Не удалось поставить на паузу");
+  },
+
+  async resumeRagIndexer(): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/rss/index/resume`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Не удалось возобновить");
   },
 
   async triggerCollect(): Promise<{ new_articles: number }> {

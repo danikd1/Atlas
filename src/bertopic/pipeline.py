@@ -164,7 +164,10 @@ def _load_articles(
     if conn is None:
         raise RuntimeError("Нет подключения к БД")
 
-    conditions = ["pa.title IS NOT NULL", "pa.summary IS NOT NULL", "pa.summary != ''"]
+    conditions = [
+        "pa.title IS NOT NULL",
+        "((pa.ai_summary IS NOT NULL AND pa.ai_summary != '') OR (pa.summary IS NOT NULL AND pa.summary != ''))",
+    ]
     params: list = []
 
     if days_back:
@@ -183,7 +186,7 @@ def _load_articles(
     limit_clause = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
-        SELECT pa.link, pa.title, pa.summary, pa.source, pa.published_at
+        SELECT pa.link, pa.title, pa.ai_summary, pa.summary, pa.source, pa.published_at
         FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
         WHERE {where}
         ORDER BY pa.published_at DESC NULLS LAST
@@ -198,10 +201,10 @@ def _load_articles(
     docs, meta = [], []
     for row in rows:
         title = (row.get("title") or "").strip()
-        summary = (row.get("summary") or "").strip()
+        body = (row.get("ai_summary") or row.get("summary") or "").strip()
         if not title:
             continue
-        docs.append(f"{title}. {summary}" if summary else title)
+        docs.append(f"{title}. {body}" if body else title)
         meta.append({
             "link": str(row.get("link") or ""),
             "title": title,

@@ -411,6 +411,8 @@ function SidebarContent({ selectedSource, setSelectedSource }: SidebarContentPro
     next_run_at: string | null;
     is_running: boolean;
     last_new_articles: number | null;
+    text_extraction_running: boolean;
+    text_extraction_pending: number;
   } | null>(null);
   const [isCollecting, setIsCollecting] = useState(false);
 
@@ -786,6 +788,12 @@ function SidebarContent({ selectedSource, setSelectedSource }: SidebarContentPro
               </p>
             )}
             {isCollecting && <p className="text-xs text-blue-500">Обновление...</p>}
+            {!isCollecting && rssStatus?.text_extraction_running && (
+              <p className="text-xs text-blue-400">Извлекаем тексты...</p>
+            )}
+            {!isCollecting && !rssStatus?.text_extraction_running && (rssStatus?.text_extraction_pending ?? 0) > 0 && (
+              <p className="text-xs text-gray-400">{rssStatus!.text_extraction_pending} статей ждут обработки</p>
+            )}
           </div>
           <button
             type="button"

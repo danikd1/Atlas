@@ -5,12 +5,12 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from config.config import JWT_ALGORITHM, JWT_EXPIRE_DAYS, JWT_SECRET
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme = HTTPBearer()
 
 
 def hash_password(password: str) -> str:
@@ -49,11 +49,11 @@ def decode_access_token(token: str) -> int:
         )
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(oauth2_scheme)) -> dict:
     """FastAPI dependency: извлекает user_id из JWT, загружает пользователя из БД."""
     from src.tools.db_state import get_connection, get_user_by_id
 
-    user_id = decode_access_token(token)
+    user_id = decode_access_token(credentials.credentials)
     conn = get_connection()
     if conn is None:
         raise HTTPException(status_code=503, detail="БД недоступна")

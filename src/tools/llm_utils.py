@@ -268,7 +268,7 @@ FEED_CATEGORIES = [
 ]
 
 
-def suggest_feed_category(name: str, description: str, url: str) -> Optional[str]:
+def suggest_feed_category(name: str, description: str, url: str, credentials: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
     """
     Определяет категорию RSS-ленты через GigaChat.
 
@@ -294,7 +294,7 @@ def suggest_feed_category(name: str, description: str, url: str) -> Optional[str
             f"Доступные категории:\n{categories_list}\n\n"
             f"Ответь одной строкой — только названием категории из списка, без пояснений."
         )
-        client = create_gigachat_client()
+        client = create_gigachat_client(credentials=credentials, model=model)
         with client:
             from gigachat.models import Chat, Messages, MessagesRole
             response = client.chat(
@@ -319,7 +319,7 @@ def suggest_feed_category(name: str, description: str, url: str) -> Optional[str
         return None
 
 
-def generate_feed_description(name: str, url: str, titles: list) -> Optional[str]:
+def generate_feed_description(name: str, url: str, titles: list, credentials: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
     """
     Генерирует описание RSS-ленты на русском языке на основе заголовков последних статей.
 
@@ -344,7 +344,7 @@ def generate_feed_description(name: str, url: str, titles: list) -> Optional[str
             f"Последние заголовки статей:\n{titles_text}\n\n"
             f"Ответь только одним предложением, без пояснений."
         )
-        client = create_gigachat_client()
+        client = create_gigachat_client(credentials=credentials, model=model)
         with client:
             from gigachat.models import Chat, Messages, MessagesRole
             response = client.chat(

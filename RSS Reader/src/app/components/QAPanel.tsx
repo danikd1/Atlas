@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
-import { Send, Loader2, Clock, ChevronDown, ChevronRight } from "lucide-react";
+import { Send, Loader2, Clock, ChevronDown, ChevronRight, AlertTriangle, Play } from "lucide-react";
 import { api } from "../lib/api";
 import { qaCache, qaCacheKey, type QAHistoryItem, type QASource } from "../lib/qaCache";
 
@@ -141,7 +141,25 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
   // Отслеживаем какой элемент "свежий" (раскрыт по умолчанию)
   const [latestQuestion, setLatestQuestion] = useState<string | null>(null);
 
+  const [ragPending, setRagPending] = useState<number | null>(null);
+  const [ragIndexed, setRagIndexed] = useState<number | null>(null);
+  const [extractionPending, setExtractionPending] = useState(0);
+  const [startingIndexer, setStartingIndexer] = useState(false);
+
   const feedKey = qaCacheKey(feedIds);
+
+  const fetchRagStatus = useCallback(async () => {
+    // Skip RAG status check when BERTopic collection is active
+    if (collectionId != null) return;
+    try {
+      const s = await api.getRssStatus();
+      setRagPending(s.rag_pending ?? 0);
+      setRagIndexed(s.rag_indexed ?? 0);
+      setExtractionPending(s.text_extraction_pending ?? 0);
+    } catch {
+      // ignore
+    }
+  }, [collectionId]);
 
   useEffect(() => {
     const h = qaCache.getHistory(feedKey);
@@ -150,6 +168,28 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
     setError(null);
     setQuestion("");
   }, [feedKey]);
+
+  useEffect(() => {
+    fetchRagStatus();
+    const id = setInterval(fetchRagStatus, 15_000);
+    return () => clearInterval(id);
+  }, [fetchRagStatus]);
+
+  const handleStartIndexer = async () => {
+    setStartingIndexer(true);
+    try {
+      if (extractionPending > 0) {
+        await api.startExtractionWorker();
+      } else {
+        await api.startRagIndexer();
+      }
+      await fetchRagStatus();
+    } catch {
+      // ignore
+    } finally {
+      setStartingIndexer(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,8 +231,30 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
     }
   };
 
+  const ragUnavailable = collectionId == null && ragPending !== null && ragPending > 0;
+  const ragTotal = (ragIndexed ?? 0) + (ragPending ?? 0);
+
   return (
     <div className="border-t border-gray-100 bg-gray-50">
+      {/* RAG недоступен — баннер */}
+      {ragUnavailable && (
+        <div className="mx-3 mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+          <span className="text-xs text-amber-700 flex-1 min-w-0">
+            База знаний не готова
+            {ragTotal > 0 && <span className="text-amber-500 ml-1">{ragIndexed} / {ragTotal}</span>}
+          </span>
+          <button
+            onClick={handleStartIndexer}
+            disabled={startingIndexer}
+            className="flex-shrink-0 flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-900 disabled:opacity-50 transition-colors"
+          >
+            {startingIndexer ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            Запустить
+          </button>
+        </div>
+      )}
+
       {/* Поле ввода */}
       <form onSubmit={handleSubmit} className="p-3 flex gap-2 items-end">
         <textarea

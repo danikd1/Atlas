@@ -15,6 +15,7 @@ import psycopg2
 from config.config import (
     EMBEDDING_MODEL_NAME,
     POSTGRES_ENABLED,
+    POSTGRES_TABLE_PROCESSED_ARTICLES,
     POSTGRES_TABLE_RAG_DOCUMENTS,
 )
 from src.pipeline.embedding_filter import get_embedding_model
@@ -33,6 +34,7 @@ class RetrievedChunk:
     text_payload: str
     embed_similarity_to_topic: Optional[float]
     distance: float  # pgvector distance (меньше = ближе)
+    article_id: int = 0  # заполняется в retrieve_chunks_by_feeds() для навигации в Reader mode
 
 
 def _embedding_to_vector_str(embedding: Sequence[float]) -> str:
@@ -136,6 +138,88 @@ def retrieve_chunks(
                     text_payload=row.get("text_payload") or "",
                     embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
                     distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                )
+            )
+    return chunks
+
+
+def retrieve_chunks_by_feeds(
+    conn,
+    query_embedding: Sequence[float],
+    collection_id: int,
+    feed_ids: List[int],
+    user_id: int,
+    top_k: int = 40,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[RetrievedChunk]:
+    """
+    Векторный поиск по чанкам глобальной RAG-коллекции с фильтром по лентам пользователя.
+
+    Ключевое отличие от retrieve_chunks():
+    - JOIN user_feeds для per-user изоляции
+    - JOIN processed_articles для article_id (навигация в Reader mode)
+    - Фильтр по feed_ids + user_id
+    """
+    if conn is None or not POSTGRES_ENABLED:
+        return []
+    if not query_embedding or not feed_ids:
+        return []
+
+    emb_str = _embedding_to_vector_str(query_embedding)
+
+    conditions = ["rd.collection_id = %s", "pa.feed_id = ANY(%s)"]
+    params: List[Any] = [collection_id, feed_ids]
+
+    if date_from is not None:
+        conditions.append("rd.published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("rd.published_at <= %s")
+        params.append(date_to)
+
+    where_clause = " AND ".join(conditions)
+    params_for_query = [emb_str] + [user_id] + params + [emb_str, top_k]
+
+    sql = f"""
+        SELECT
+            rd.collection_id,
+            rd.link,
+            rd.chunk_index,
+            rd.title,
+            rd.summary,
+            rd.source,
+            rd.published_at,
+            rd.text_payload,
+            rd.embed_similarity_to_topic,
+            (rd.embedding <-> %s::vector) AS distance,
+            pa.id AS article_id
+        FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+        JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = rd.link
+        JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+        WHERE {where_clause}
+        ORDER BY rd.embedding <-> %s::vector
+        LIMIT %s;
+    """
+
+    chunks: List[RetrievedChunk] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, params_for_query)
+        rows = cur.fetchall()
+        for row in rows:
+            chunks.append(
+                RetrievedChunk(
+                    collection_id=row["collection_id"],
+                    link=row["link"],
+                    chunk_index=row["chunk_index"],
+                    title=row.get("title") or "",
+                    summary=row.get("summary") or "",
+                    source=row.get("source") or "",
+                    published_at=row.get("published_at"),
+                    text_payload=row.get("text_payload") or "",
+                    embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
+                    distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                    article_id=int(row["article_id"]) if row.get("article_id") else 0,
                 )
             )
     return chunks

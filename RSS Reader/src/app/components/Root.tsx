@@ -1,9 +1,10 @@
 import { Outlet, Link, useLocation, useNavigate, Navigate } from "react-router";
-import { Rss, Home, Search, X, Map, LogOut, User } from "lucide-react";
+import { Rss, Home, Search, X, Map, LogOut, User, Play, Pause, Database } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
 import { ProfileModal } from "./ProfileModal";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ArticleSource, OutletCtx } from "../types";
 import { api, ApiArticleItem } from "../lib/api";
 import { authService } from "../lib/authService";
@@ -81,6 +82,62 @@ export function Root() {
 
   const [showProfile, setShowProfile] = useState(false);
 
+  // ── RAG index bar ─────────────────────────────────────────────
+  const [ragStatus, setRagStatus] = useState<{
+    rag_indexed: number;
+    rag_pending: number;
+    rag_indexing: boolean;
+    rag_paused: boolean;
+    text_extraction_pending: number;
+    text_extraction_running: boolean;
+  } | null>(null);
+  const [ragTooltip, setRagTooltip] = useState(false);
+  const [ragTooltipPos, setRagTooltipPos] = useState<{ left: number; top: number } | null>(null);
+  const ragBarRef = useRef<HTMLDivElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+
+  const fetchRagStatus = useCallback(async () => {
+    try {
+      const s = await api.getRssStatus();
+      setRagStatus({
+        rag_indexed: s.rag_indexed,
+        rag_pending: s.rag_pending,
+        rag_indexing: s.rag_indexing,
+        rag_paused: s.rag_paused,
+        text_extraction_pending: s.text_extraction_pending,
+        text_extraction_running: s.text_extraction_running,
+      });
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchRagStatus();
+    const id = setInterval(fetchRagStatus, 5_000);
+    return () => clearInterval(id);
+  }, [fetchRagStatus]);
+
+  const handleRagPauseResume = async () => {
+    try {
+      if (ragStatus?.rag_paused) {
+        await api.resumeRagIndexer();
+      } else {
+        await api.pauseRagIndexer();
+      }
+      await fetchRagStatus();
+    } catch {}
+  };
+
+  const handleRagStart = async () => {
+    try {
+      if (ragStatus && ragStatus.text_extraction_pending > 0) {
+        await api.startExtractionWorker();
+      } else {
+        await api.startRagIndexer();
+      }
+      await fetchRagStatus();
+    } catch {}
+  };
+
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     parseInt(localStorage.getItem("sidebarWidth") || "256")
   );
@@ -131,7 +188,7 @@ export function Root() {
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
-      <header className="bg-white border-b border-gray-200 z-10 flex-shrink-0">
+      <header ref={headerRef} className="relative bg-white border-b border-gray-200 z-10 flex-shrink-0">
         <div className="px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-4">
 
           {/* Logo */}
@@ -145,7 +202,7 @@ export function Root() {
             </span>
           </Link>
 
-          {/* Nav — сразу после логотипа */}
+          {/* Nav */}
           <nav className="flex gap-1 flex-shrink-0">
             <Link
               to="/"
@@ -176,7 +233,7 @@ export function Root() {
             </Link>
           </nav>
 
-          {/* Search — по центру, занимает оставшееся место */}
+          {/* Search — flex-1, оригинальное положение по центру */}
           <div ref={searchRef} className="relative flex-1 mx-4">
             <div className="relative max-w-md mx-auto">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -195,8 +252,6 @@ export function Root() {
                 </button>
               )}
             </div>
-
-            {/* Dropdown */}
             {searchOpen && (
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-[520px] bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-[480px] overflow-y-auto">
                 {searchLoading ? (
@@ -239,8 +294,105 @@ export function Root() {
             )}
           </div>
 
-          {/* Профиль + Выйти */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          {/* База знаний (RAG) + Профиль + Выйти */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+
+            {/* RAG progress bar */}
+            {ragStatus && (ragStatus.rag_indexed > 0 || ragStatus.rag_pending > 0) && (() => {
+              const { rag_indexed: indexed, rag_pending: pending, rag_indexing: isIndexing, rag_paused: isPaused, text_extraction_pending: extractPending, text_extraction_running: extractRunning } = ragStatus;
+              const total = indexed + pending;
+              const pct = total > 0 ? (pending === 0 ? 100 : Math.min(Math.floor((indexed / total) * 100), 99)) : 100;
+              return (
+                <div className="flex items-center gap-1.5 border-r border-gray-200 pr-3">
+                  <div
+                    ref={ragBarRef}
+                    className="cursor-default"
+                    onMouseEnter={() => {
+                      if (headerRef.current) {
+                        const hr = headerRef.current.getBoundingClientRect();
+                        const br = ragBarRef.current!.getBoundingClientRect();
+                        setRagTooltipPos({ left: Math.max(br.right - 288, 8), top: hr.bottom + 8 });
+                      }
+                      setRagTooltip(true);
+                    }}
+                    onMouseLeave={() => { setRagTooltip(false); setRagTooltipPos(null); }}
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs text-gray-400 leading-none whitespace-nowrap">
+                        {isIndexing && !isPaused ? "База знаний..." :
+                         isPaused ? "База знаний: пауза" :
+                         pending === 0 ? `База знаний: ${indexed}` :
+                         `База знаний: ${indexed} / ${total}`}
+                      </span>
+                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${isPaused ? "bg-gray-300" : "bg-blue-400"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {!isIndexing && !extractRunning && pending > 0 && (
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        onClick={handleRagStart}
+                        className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                      >
+                        <Play className="w-3.5 h-3.5" />
+                      </button>
+                      <div className="pointer-events-none absolute top-full right-0 mt-2 hidden group-hover:block z-50">
+                        <div className="bg-gray-800 text-white text-xs rounded px-2 py-1 whitespace-nowrap">
+                          {extractPending > 0 ? "Извлечь тексты и проиндексировать" : "Запустить индексацию"}
+                        </div>
+                        <div className="absolute bottom-full right-2.5 border-4 border-transparent border-b-gray-800" />
+                      </div>
+                    </div>
+                  )}
+                  {isIndexing && (
+                    <button
+                      type="button"
+                      onClick={handleRagPauseResume}
+                      title={isPaused ? "Возобновить" : "Пауза"}
+                      className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+
+                  {ragTooltip && ragTooltipPos && createPortal(
+                    <div
+                      style={{ position: "fixed", left: ragTooltipPos.left, top: ragTooltipPos.top, zIndex: 2147483647 }}
+                      className="w-72 bg-gray-900 text-white text-xs rounded-lg px-3 py-2.5 shadow-xl leading-relaxed pointer-events-none"
+                    >
+                      <div className="flex items-center gap-1.5 mb-1.5 font-medium">
+                        <Database className="w-3.5 h-3.5 flex-shrink-0" />
+                        Что такое База знаний?
+                      </div>
+                      <p className="text-gray-300">
+                        Чтобы отвечать на вопросы точно, Atlas разбивает статьи на фрагменты и сохраняет их в векторную базу данных.
+                      </p>
+                      <p className="text-gray-300 mt-1.5">
+                        Пока база строится, вопросы обрабатываются по краткому описанию статей. Как только все статьи проиндексированы — QA переключается на точный поиск по полным текстам.
+                      </p>
+                      {extractPending > 0 && (
+                        <p className="mt-1.5 text-amber-300">
+                          ⏳ {extractPending} {extractPending === 1 ? "статья ждёт" : "статей ждут"} извлечения текста
+                        </p>
+                      )}
+                      <p className="mt-1 text-gray-400">
+                        {pending === 0
+                          ? "✓ База актуальна — QA работает по полным текстам"
+                          : `${pct}% готово (${indexed} из ${total})`}
+                      </p>
+                    </div>,
+                    document.body
+                  )}
+                </div>
+              );
+            })()}
+
             <button
               onClick={() => setShowProfile(true)}
               className="px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"

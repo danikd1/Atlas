@@ -119,6 +119,8 @@ def ensure_tables(conn) -> None:
             "feed_id INT REFERENCES feeds(id) ON DELETE SET NULL",
             "full_text TEXT",
             "ai_summary TEXT",
+            "full_text_error BOOLEAN DEFAULT FALSE",
+            "rag_indexed_at TIMESTAMPTZ",
         ):
             try:
                 cur.execute(
@@ -266,6 +268,16 @@ def ensure_tables(conn) -> None:
                     f"""
                     CREATE INDEX IF NOT EXISTS idx_rag_documents_collection_published
                     ON {POSTGRES_TABLE_RAG_DOCUMENTS} (collection_id, published_at DESC);
+                    """
+                )
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding_hnsw
+                    ON {POSTGRES_TABLE_RAG_DOCUMENTS} USING hnsw (embedding vector_cosine_ops)
+                    WITH (m = 16, ef_construction = 64);
                     """
                 )
             except Exception:
@@ -1767,12 +1779,13 @@ def get_article_by_id(conn, article_id: int, user_id: int = 0) -> Optional[dict]
 
 
 def update_article_full_text(conn, article_id: int, full_text: str) -> None:
-    """Сохраняет извлечённый full_text в processed_articles."""
+    """Сохраняет извлечённый full_text в processed_articles.
+    Сбрасывает rag_indexed_at = NULL — индексатор переобработает статью при следующем запуске."""
     if conn is None:
         return
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE processed_articles SET full_text = %s WHERE id = %s;",
+            "UPDATE processed_articles SET full_text = %s, rag_indexed_at = NULL WHERE id = %s;",
             (full_text, article_id),
         )
 
@@ -1807,6 +1820,73 @@ def save_ai_summary(conn, article_id: int, ai_summary: str) -> None:
             "UPDATE processed_articles SET ai_summary = %s WHERE id = %s;",
             (ai_summary, article_id),
         )
+
+
+def get_articles_without_fulltext(conn, limit: int = 100) -> list:
+    """Возвращает статьи с full_text IS NULL (и без флага ошибки) — фаза 1 воркера."""
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, link, title, ai_summary
+            FROM processed_articles
+            WHERE full_text IS NULL AND full_text_error = FALSE
+            ORDER BY published_at DESC
+            LIMIT %s;
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_articles_without_summary(conn, limit: int = 100) -> list:
+    """Возвращает статьи с full_text но без ai_summary — фаза 2 (досуммаризация)."""
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, title, full_text
+            FROM processed_articles
+            WHERE full_text IS NOT NULL AND ai_summary IS NULL
+            ORDER BY published_at DESC
+            LIMIT %s;
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def mark_fulltext_error(conn, article_id: int) -> None:
+    """Помечает статью как не поддающуюся извлечению — воркер её пропустит."""
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE processed_articles SET full_text_error = TRUE WHERE id = %s;",
+            (article_id,),
+        )
+
+
+def mark_domain_fulltext_error(conn, domain: str) -> int:
+    """Помечает все оставшиеся статьи домена как full_text_error = TRUE.
+    Вызывается когда весь батч домена провалился — домен не поддерживает извлечение (JS-рендеринг и т.д.).
+    Возвращает количество помеченных статей."""
+    if conn is None or not domain:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE processed_articles
+            SET full_text_error = TRUE
+            WHERE full_text IS NULL
+              AND full_text_error = FALSE
+              AND link LIKE %s
+            """,
+            (f"%{domain}%",),
+        )
+        return cur.rowcount
 
 
 def mark_article_read(conn, link: str, user_id: int = 0) -> None:
@@ -2212,3 +2292,176 @@ def update_user_password(conn, user_id: int, new_password_hash: str) -> None:
             "UPDATE users SET password_hash = %s WHERE id = %s;",
             (new_password_hash, user_id),
         )
+
+
+# ---------------------------------------------------------------------------
+# RAG.2 — индексация: глобальная коллекция, очередь, статистика
+# ---------------------------------------------------------------------------
+
+_GLOBAL_RAG_COLLECTION_KEY = "global_rag_index"
+_GLOBAL_RAG_COLLECTION_NAME = "Global RAG Index"
+
+
+def get_or_create_global_rag_collection(conn) -> Optional[dict]:
+    """Находит или создаёт глобальную RAG-коллекцию (owner_id = NULL).
+    Одна на всю систему — статьи индексируются без привязки к пользователю."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, collection_key, owner_id
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            WHERE collection_key = %s AND name = %s;
+            """,
+            (_GLOBAL_RAG_COLLECTION_KEY, _GLOBAL_RAG_COLLECTION_NAME),
+        )
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+        cur.execute(
+            f"""
+            INSERT INTO {POSTGRES_TABLE_COLLECTIONS}
+                (name, collection_key, owner_id, updated_at, last_refreshed_at)
+            VALUES (%s, %s, NULL, NOW(), NOW())
+            RETURNING id, name, collection_key, owner_id;
+            """,
+            (_GLOBAL_RAG_COLLECTION_NAME, _GLOBAL_RAG_COLLECTION_KEY),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def get_articles_for_rag_indexing(conn, limit: int = 50) -> list:
+    """Статьи в очереди на индексацию: есть full_text ИЛИ summary, ещё не проиндексированы.
+    Если full_text есть — используется он. Если нет — summary как fallback.
+    feed_id IS NOT NULL — статьи без источника пропускаются (старые данные до введения поля)."""
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, link, title, summary, source, published_at, full_text
+            FROM {POSTGRES_TABLE_PROCESSED_ARTICLES}
+            WHERE (
+                full_text IS NOT NULL
+                OR (full_text_error = TRUE AND summary IS NOT NULL AND summary != '')
+            )
+              AND feed_id IS NOT NULL
+              AND rag_indexed_at IS NULL
+            ORDER BY published_at DESC
+            LIMIT %s;
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def mark_articles_rag_indexed(conn, article_ids: list) -> None:
+    """Проставляет rag_indexed_at = NOW() после успешной индексации."""
+    if conn is None or not article_ids:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {POSTGRES_TABLE_PROCESSED_ARTICLES} SET rag_indexed_at = NOW() WHERE id = ANY(%s);",
+            (article_ids,),
+        )
+
+
+def get_rag_stats(conn, user_id: int = None) -> dict:
+    """Статистика RAG-индекса для конкретного пользователя (по его лентам).
+    Индексируемые = статьи у которых есть full_text ИЛИ summary (summary — fallback для источников без full_text)."""
+    if conn is None:
+        return {"indexed": 0, "pending": 0, "total_chunks": 0}
+    with conn.cursor() as cur:
+        if user_id is not None:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE pa.rag_indexed_at IS NOT NULL) AS indexed,
+                    COUNT(*) FILTER (WHERE pa.rag_indexed_at IS NULL) AS pending
+                FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
+                JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+                WHERE NOT (pa.full_text_error = TRUE AND (pa.summary IS NULL OR pa.summary = ''));
+                """,
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE rag_indexed_at IS NOT NULL
+                        AND (full_text IS NOT NULL OR (summary IS NOT NULL AND summary != ''))) AS indexed,
+                    COUNT(*) FILTER (WHERE rag_indexed_at IS NULL AND feed_id IS NOT NULL
+                        AND (full_text IS NOT NULL OR (summary IS NOT NULL AND summary != ''))) AS pending
+                FROM {POSTGRES_TABLE_PROCESSED_ARTICLES};
+                """
+            )
+        row = cur.fetchone()
+        indexed = int(row["indexed"]) if row else 0
+        pending = int(row["pending"]) if row else 0
+        try:
+            cur.execute(f"SELECT COUNT(*) AS total FROM {POSTGRES_TABLE_RAG_DOCUMENTS};")
+            r2 = cur.fetchone()
+            total_chunks = int(r2["total"]) if r2 else 0
+        except Exception:
+            total_chunks = 0
+    return {"indexed": indexed, "pending": pending, "total_chunks": total_chunks}
+
+
+def get_global_rag_collection(conn) -> "Optional[dict]":
+    """Read-only поиск глобальной RAG-коллекции. Возвращает None если ещё не создана (RAG.2 не запускался)."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, name, collection_key, owner_id
+            FROM {POSTGRES_TABLE_COLLECTIONS}
+            WHERE collection_key = %s AND name = %s;
+            """,
+            (_GLOBAL_RAG_COLLECTION_KEY, _GLOBAL_RAG_COLLECTION_NAME),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def get_rag_chunk_count(conn, collection_id: int, feed_ids: list, user_id: int) -> int:
+    """Число чанков в глобальной коллекции для лент пользователя. 0 → fallback на in-memory."""
+    if conn is None or not feed_ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+            JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = rd.link
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            WHERE rd.collection_id = %s AND pa.feed_id = ANY(%s);
+            """,
+            (user_id, collection_id, feed_ids),
+        )
+        row = cur.fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def get_rag_pending_for_feeds(conn, feed_ids: list, user_id: int) -> int:
+    """Число статей в лентах пользователя которые можно проиндексировать, но ещё не проиндексированы.
+    Индексируемые = есть full_text ИЛИ summary (summary — fallback для источников без full_text).
+    0 означает 100% покрытие — RAG доступен."""
+    if conn is None or not feed_ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            WHERE pa.feed_id = ANY(%s)
+              AND (pa.full_text IS NOT NULL OR (pa.summary IS NOT NULL AND pa.summary != ''))
+              AND pa.rag_indexed_at IS NULL;
+            """,
+            (user_id, feed_ids),
+        )
+        row = cur.fetchone()
+    return int(row["cnt"]) if row else 0

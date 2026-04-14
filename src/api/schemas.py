@@ -296,6 +296,8 @@ class CollectionArticle(BaseModel):
 class FeedValidateRequest(BaseModel):
     """Запрос на валидацию RSS-ленты по URL перед сохранением."""
     url: str = Field(..., description="URL RSS-ленты для проверки.", examples=["https://habr.com/ru/rss/hubs/python/articles/"])
+    gigachat_credentials: Optional[str] = Field(default=None, description="API-ключ GigaChat для генерации описания и категории.")
+    gigachat_model: Optional[str] = Field(default=None)
 
 
 class FeedValidateResponse(BaseModel):

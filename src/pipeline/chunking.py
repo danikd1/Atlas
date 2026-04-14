@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _count_tokens(text: str, tokenizer: Any) -> int:
+def count_tokens(text: str, tokenizer: Any) -> int:
     """Возвращает число токенов в тексте по переданному токенайзеру. Без токенайзера — приближение по символам (~4 символа/токен)."""
     if not text:
         return 0
@@ -47,11 +47,15 @@ def _recursive_split(
     text = (text or "").strip()
     if not text:
         return []
-    n = _count_tokens(text, tokenizer)
+    n = count_tokens(text, tokenizer)
     if n <= max_tokens and n > 0:
         return [text]
     if not separators:
-        # Последний уровень: режем по длине (приблизительно по символам)
+        # Последний уровень: режем по длине (приблизительно по символам).
+        # TODO: approx_chars = max_tokens * 4 откалиброван под английский (~4 символа/токен).
+        # Для русского/CJK BPE-токен ≈ 1–1.5 символа — чанки получаются в 3–4 раза крупнее лимита.
+        # Правильный fix: использовать tokenizer.encode() для точного подсчёта, если tokenizer доступен.
+        # Обходное решение: rag_indexer.py обрезает text_payload до точного лимита перед model.encode().
         approx_chars = (max_tokens * 4)  # грубая оценка
         out = []
         start = 0
@@ -95,7 +99,7 @@ def merge_segments_with_overlap(
     overlap_buffer_tokens = 0
 
     for seg in segments:
-        seg_tokens = _count_tokens(seg, tokenizer)
+        seg_tokens = count_tokens(seg, tokenizer)
         if seg_tokens <= 0:
             continue
         # Если один сегмент больше max_tokens — режем его по предложениям и снова собираем
@@ -103,7 +107,7 @@ def merge_segments_with_overlap(
             sub_segs = _split_by_sentences(seg)
             if sub_segs:
                 for s in sub_segs:
-                    st = _count_tokens(s, tokenizer)
+                    st = count_tokens(s, tokenizer)
                     if current_tokens + st > max_tokens and current:
                         chunk_text = " ".join(current)
                         chunks.append(chunk_text)
@@ -111,7 +115,7 @@ def merge_segments_with_overlap(
                         overlap_buffer = []
                         overlap_buffer_tokens = 0
                         for x in reversed(current):
-                            xt = _count_tokens(x, tokenizer)
+                            xt = count_tokens(x, tokenizer)
                             if overlap_buffer_tokens + xt <= overlap_tokens:
                                 overlap_buffer.insert(0, x)
                                 overlap_buffer_tokens += xt
@@ -128,7 +132,7 @@ def merge_segments_with_overlap(
             overlap_buffer = []
             overlap_buffer_tokens = 0
             for x in reversed(current):
-                xt = _count_tokens(x, tokenizer)
+                xt = count_tokens(x, tokenizer)
                 if overlap_buffer_tokens + xt <= overlap_tokens:
                     overlap_buffer.insert(0, x)
                     overlap_buffer_tokens += xt

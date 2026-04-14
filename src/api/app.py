@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from pydantic import BaseModel
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,6 +86,26 @@ _scheduler_state: dict = {
     "last_new_articles": None, # int
 }
 
+# ─── Extraction worker state ──────────────────────────────────────────────────
+
+_extraction_lock = threading.Lock()
+_extraction_state: dict = {
+    "running": False,
+    "pending": 0,
+    "last_result": None,  # {"extracted": int, "summarized": int, "failed": int}
+}
+
+# ─── RAG indexer state ────────────────────────────────────────────────────────
+
+_indexer_lock = threading.Lock()
+_indexer_run_event = threading.Event()
+_indexer_run_event.set()  # не на паузе при старте
+_indexer_state: dict = {
+    "running": False,
+    "paused": False,
+    "last_result": None,  # {"indexed": int, "chunks_created": int, "failed": int}
+}
+
 COLLECT_INTERVAL_HOURS = 1
 
 
@@ -107,11 +128,81 @@ def _run_scheduled_collect():
         job = _scheduler.get_job("rss_collect")
         _scheduler_state["next_run_at"] = job.next_run_time if job else None
         logger.info("Scheduler: сбор завершён, новых статей: %d", new_articles)
+        _start_extraction_worker()
     except Exception as e:
         logger.exception("Scheduler: ошибка сбора RSS: %s", e)
     finally:
         _scheduler_state["is_running"] = False
         _collect_lock.release()
+
+
+def _run_extraction_worker(full_scan: bool = False):
+    """Тело воркера — запускается в отдельном потоке."""
+    if not _extraction_lock.acquire(blocking=False):
+        logger.info("Extraction worker: уже запущен, пропускаем.")
+        return
+    try:
+        _extraction_state["running"] = True
+        from src.tools.db_state import get_connection
+        from src.pipeline.text_extraction_worker import extract_pending_articles, get_pending_count
+        conn = get_connection()
+        _extraction_state["pending"] = get_pending_count(conn)
+        logger.info("Extraction worker: начинаем, ожидают %d статей.", _extraction_state["pending"])
+        result = extract_pending_articles(conn, full_scan=full_scan)
+        _extraction_state["last_result"] = result
+        _extraction_state["pending"] = get_pending_count(conn)
+        logger.info("Extraction worker: завершён. %s", result)
+        _start_rag_indexer()
+    except Exception as e:
+        logger.exception("Extraction worker: ошибка: %s", e)
+    finally:
+        _extraction_state["running"] = False
+        _extraction_lock.release()
+
+
+def _start_extraction_worker(full_scan: bool = False):
+    """Запускает воркер извлечения текстов в фоновом потоке."""
+    t = threading.Thread(target=_run_extraction_worker, kwargs={"full_scan": full_scan}, daemon=True, name="extraction-worker")
+    t.start()
+
+
+def _run_rag_indexer():
+    """Тело RAG-индексатора — запускается в отдельном потоке после text_extraction_worker.
+    Крутится в цикле пока есть что индексировать — batch_size=50 ограничивает память,
+    но не число итераций. HTTP-запросов нет, rate limiting не нужен.
+    Поддерживает паузу через _indexer_run_event: wait() блокирует поток до resume."""
+    if not _indexer_lock.acquire(blocking=False):
+        logger.info("RAG indexer: уже запущен, пропускаем.")
+        return
+    try:
+        _indexer_state["running"] = True
+        from src.tools.db_state import get_connection
+        from src.pipeline.rag_indexer import index_pending_articles
+        conn = get_connection()
+        total_indexed = 0
+        total_chunks = 0
+        while True:
+            _indexer_run_event.wait()  # блокируется если установлена пауза
+            result = index_pending_articles(conn)
+            total_indexed += result["indexed"]
+            total_chunks += result["chunks_created"]
+            if result["indexed"] == 0:
+                break
+        _indexer_state["last_result"] = {"indexed": total_indexed, "chunks_created": total_chunks}
+        logger.info("RAG indexer: завершён. indexed=%d chunks=%d", total_indexed, total_chunks)
+    except Exception as e:
+        logger.exception("RAG indexer: ошибка: %s", e)
+    finally:
+        _indexer_state["running"] = False
+        _indexer_state["paused"] = False
+        _indexer_run_event.set()  # сбрасываем паузу чтобы следующий запуск стартовал чисто
+        _indexer_lock.release()
+
+
+def _start_rag_indexer():
+    """Запускает RAG-индексатор в фоновом потоке."""
+    t = threading.Thread(target=_run_rag_indexer, daemon=True, name="rag-indexer")
+    t.start()
 
 
 @asynccontextmanager
@@ -376,14 +467,24 @@ def list_collection_articles(collection_id: int, current_user: dict = Depends(ge
 )
 def rss_status(current_user: dict = Depends(get_current_user)):
     """Возвращает когда последний раз запускался сбор и когда следующий."""
+    from src.tools.db_state import get_connection, get_rag_stats
+    from src.pipeline.text_extraction_worker import get_pending_count
     last = _scheduler_state["last_run_at"]
     nxt = _scheduler_state["next_run_at"]
+    conn = get_connection()
+    rag = get_rag_stats(conn, user_id=current_user["id"])
     return {
         "last_run_at": last.isoformat() + "Z" if last else None,
         "next_run_at": nxt.isoformat() if nxt else None,
         "is_running": _scheduler_state["is_running"],
         "last_new_articles": _scheduler_state["last_new_articles"],
         "interval_hours": COLLECT_INTERVAL_HOURS,
+        "text_extraction_running": _extraction_state["running"],
+        "text_extraction_pending": get_pending_count(conn),
+        "rag_indexing": _indexer_state["running"],
+        "rag_paused": _indexer_state["paused"],
+        "rag_indexed": rag["indexed"],
+        "rag_pending": rag["pending"],
     }
 
 
@@ -424,6 +525,8 @@ def rss_collect_endpoint(body: RssCollectRequest, current_user: dict = Depends(g
         job = _scheduler.get_job("rss_collect")
         _scheduler_state["next_run_at"] = job.next_run_time if job else None
 
+        _start_extraction_worker()
+
         return RssCollectResponse(
             success=True,
             new_articles=new_articles,
@@ -442,6 +545,85 @@ def rss_collect_endpoint(body: RssCollectRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         _scheduler_state["is_running"] = False
+
+
+class ExtractRequest(BaseModel):
+    full_scan: bool = False
+
+
+@app.post(
+    "/api/rss/extract",
+    tags=["RSS"],
+    summary="Запустить фоновое извлечение текстов вручную",
+)
+def rss_extract_endpoint(body: ExtractRequest = ExtractRequest(), current_user: dict = Depends(get_current_user)):
+    """Запускает воркер извлечения full_text + BART-суммаризации без RSS-сбора.
+    full_scan=true — обрабатывает все статьи без лимита (для первоначального заполнения).
+    """
+    if _extraction_state["running"]:
+        return {
+            "started": False,
+            "message": "Воркер уже запущен.",
+            "pending": _extraction_state["pending"],
+        }
+    from src.tools.db_state import get_connection
+    from src.pipeline.text_extraction_worker import get_pending_count
+    conn = get_connection()
+    pending = get_pending_count(conn)
+    _extraction_state["pending"] = pending
+    _start_extraction_worker(full_scan=body.full_scan)
+    mode = "полное сканирование" if body.full_scan else "пакетный режим"
+    return {
+        "started": True,
+        "message": f"Воркер запущен ({mode}). Статей в очереди: {pending}.",
+        "pending": pending,
+        "full_scan": body.full_scan,
+    }
+
+
+@app.post(
+    "/api/rss/index",
+    tags=["RSS"],
+    summary="Запустить RAG-индексацию вручную",
+)
+def rss_index_endpoint(current_user: dict = Depends(get_current_user)):
+    """Запускает фоновую RAG-индексацию без RSS-сбора и извлечения текстов.
+    Полезно для первоначального заполнения rag_documents после text_extraction_worker."""
+    if _indexer_state["running"]:
+        return {"started": False, "message": "RAG-индексатор уже запущен."}
+    from src.tools.db_state import get_connection, get_rag_stats
+    conn = get_connection()
+    rag = get_rag_stats(conn, user_id=current_user["id"])
+    _start_rag_indexer()
+    return {
+        "started": True,
+        "message": f"RAG-индексатор запущен. Статей в очереди: {rag['pending']}.",
+        "pending": rag["pending"],
+    }
+
+
+@app.post(
+    "/api/rss/index/pause",
+    tags=["RSS"],
+    summary="Поставить RAG-индексатор на паузу",
+)
+def rss_index_pause(current_user: dict = Depends(get_current_user)):
+    """Приостанавливает RAG-индексатор между батчами. Текущий батч завершается."""
+    _indexer_run_event.clear()
+    _indexer_state["paused"] = True
+    return {"paused": True}
+
+
+@app.post(
+    "/api/rss/index/resume",
+    tags=["RSS"],
+    summary="Возобновить RAG-индексатор после паузы",
+)
+def rss_index_resume(current_user: dict = Depends(get_current_user)):
+    """Снимает паузу RAG-индексатора."""
+    _indexer_run_event.set()
+    _indexer_state["paused"] = False
+    return {"paused": False}
 
 
 @app.post(
@@ -735,11 +917,11 @@ def bertopic_collection_articles(collection_id: int, current_user: dict = Depend
 @app.post(
     "/api/feeds/qa",
     tags=["Q&A"],
-    summary="QA по статьям из лент (без RAG)",
+    summary="QA по статьям из лент",
     response_model=FeedQAResponse,
 )
 def feed_qa(body: FeedQARequest, current_user: dict = Depends(get_current_user)):
-    """QA по статьям пользователя из указанных лент. Не требует предварительной индексации."""
+    """QA по статьям пользователя из указанных лент. При наличии RAG-индекса использует pgvector, иначе — in-memory similarity."""
     from src.tools.db_state import get_connection, list_feeds
     conn = get_connection()
     user_feed_ids = {f["id"] for f in list_feeds(conn, user_id=current_user["id"])}
@@ -843,9 +1025,9 @@ def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_cu
         titles = [e.get("title", "") for e in feed.entries[:10] if e.get("title")]
         # Генерируем описание и категорию через GigaChat (не блокируем ответ если недоступен)
         from src.tools.llm_utils import generate_feed_description, suggest_feed_category
-        description = generate_feed_description(name=name, url=body.url, titles=titles)
+        description = generate_feed_description(name=name, url=body.url, titles=titles, credentials=body.gigachat_credentials, model=body.gigachat_model)
         channel_description = feed.feed.get("description") or feed.feed.get("subtitle") or ""
-        suggested_category = suggest_feed_category(name=name, description=channel_description, url=body.url)
+        suggested_category = suggest_feed_category(name=name, description=channel_description, url=body.url, credentials=body.gigachat_credentials, model=body.gigachat_model)
         return FeedValidateResponse(
             valid=True,
             name=name,
@@ -872,9 +1054,49 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: 
     feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, description=body.description, category=body.category, folder_id=body.folder_id, user_id=current_user["id"])
     if not feed:
         raise HTTPException(status_code=500, detail="Не удалось создать ленту")
+
+    feed_id = feed["id"]
+
+    # Проверяем — есть ли уже статьи для этой ленты
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS cnt FROM processed_articles WHERE feed_id = %s", (feed_id,))
+        existing_count = (cur.fetchone() or {}).get("cnt", 0)
+
     feeds = list_feeds(conn, user_id=current_user["id"])
     full_feed = next((f for f in feeds if f["id"] == feed["id"]), feed)
     background_tasks.add_task(refresh_catalog_stats, conn)
+
+    def _collect_new_feed():
+        """Запускается в фоне только если статей ещё нет (новая/пустая лента)."""
+        try:
+            import feedparser as _fp
+            from src.main import collect_rss
+            from src.tools.db_state import get_connection, POSTGRES_TABLE_FEED_STATE
+            _conn = get_connection()
+
+            # Привязываем существующие статьи по ссылкам из RSS
+            # (нужно при повторной подписке — статьи могли быть под другим feed_id)
+            _rss = _fp.parse(body.url)
+            _links = [e.get("link") for e in _rss.entries if e.get("link")]
+            if _links:
+                with _conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE processed_articles SET feed_id = %s WHERE link = ANY(%s) AND (feed_id IS NULL OR feed_id != %s)",
+                        (feed_id, _links, feed_id),
+                    )
+                    updated = cur.rowcount
+                    if updated:
+                        logger.info("add_feed: привязали %d статей к feed_id=%s по RSS-ссылкам", updated, feed_id)
+
+            # Если статей нет — собираем из RSS
+            if existing_count == 0:
+                with _conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {POSTGRES_TABLE_FEED_STATE} WHERE source = %s", (body.name,))
+                collect_rss(rss_feeds={body.name: body.url})
+        except Exception as e:
+            logger.warning("Ошибка при начальном сборе ленты %s: %s", body.url, e)
+
+    background_tasks.add_task(_collect_new_feed)
     return FeedItem(**full_feed)
 
 
@@ -1293,9 +1515,11 @@ def summarize_article_endpoint(article_id: int, force: bool = False, body: Summa
             )
         except ValueError as e:
             return SummarizeResponse(ai_summary=None, cached=False, error=str(e))
+        from src.tools.translation import strip_html
+        clean_text = strip_html(full_text) if full_text else ""
         summary = summarize_article(
             title=article.get("title") or "",
-            full_text=full_text,
+            full_text=clean_text,
             client=giga_client,
         )
     except Exception as e:

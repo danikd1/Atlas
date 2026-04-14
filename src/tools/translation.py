@@ -100,6 +100,36 @@ def translate_text(text: str) -> str:
     return " ".join(translated_chunks)
 
 
+# Блочные элементы, чей текст переводим как единицу
+_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th", "figcaption", "blockquote"}
+
+
+def _translate_html_tag(tag) -> None:
+    """Рекурсивно переводит блочные элементы, сохраняя структуру HTML."""
+    from bs4 import NavigableString, Tag
+    for child in list(tag.children):
+        if not isinstance(child, Tag):
+            continue
+        if child.name == "img":
+            continue  # изображения не трогаем
+        if child.name in _BLOCK_TAGS:
+            text = child.get_text(strip=True)
+            if text:
+                child.clear()
+                child.append(NavigableString(translate_text(text)))
+        else:
+            _translate_html_tag(child)
+
+
+def translate_html_structure(html: str) -> str:
+    """Переводит HTML с сохранением структуры: заголовки, параграфы, списки, картинки.
+    Инлайн-ссылки (<a>) теряют href — порядок слов после перевода меняется."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    _translate_html_tag(soup)
+    return str(soup)
+
+
 def strip_html(html: str) -> str:
     """Извлекает plain text из HTML через BeautifulSoup."""
     try:
@@ -129,11 +159,14 @@ def translate_article(
     result["summary"] = translate_text(summary) if summary else None
 
     if full_text:
-        plain = strip_html(full_text)
-        translated_plain = translate_text(plain)
-        # Оборачиваем абзацы в <p>, экранируем спецсимволы (<, >, &)
-        paragraphs = [p.strip() for p in translated_plain.split("\n") if p.strip()]
-        result["full_text"] = "\n".join(f"<p>{escape(p)}</p>" for p in paragraphs)
+        if re.search(r"<[a-z][\s\S]*>", full_text, re.IGNORECASE):
+            # HTML (новый формат trafilatura) — переводим с сохранением структуры
+            result["full_text"] = translate_html_structure(full_text)
+        else:
+            # Plain text (старые статьи в БД) — прежняя логика
+            translated_plain = translate_text(full_text)
+            paragraphs = [p.strip() for p in translated_plain.split("\n") if p.strip()]
+            result["full_text"] = "\n".join(f"<p>{escape(p)}</p>" for p in paragraphs)
     else:
         result["full_text"] = None
 

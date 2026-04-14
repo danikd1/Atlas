@@ -272,6 +272,9 @@ export function FeedsPage() {
       await loadFeeds();
       window.dispatchEvent(new CustomEvent("feeds-updated"));
       resetForm();
+      // Статьи собираются в фоне — обновляем сайдбар через 4 и 10 секунд
+      setTimeout(() => window.dispatchEvent(new CustomEvent("feeds-updated")), 4_000);
+      setTimeout(() => window.dispatchEvent(new CustomEvent("feeds-updated")), 10_000);
     } catch { setValidateError("Ошибка при добавлении."); setIsAdding(false); }
   };
 
