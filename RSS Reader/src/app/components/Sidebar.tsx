@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
 import {
   Calendar,
@@ -428,18 +428,30 @@ function SidebarContent({ selectedSource, setSelectedSource }: SidebarContentPro
     return () => window.removeEventListener("feeds-updated", handler);
   }, []);
 
+  const loadStatus = useCallback(async () => {
+    try {
+      const status = await api.getRssStatus();
+      setRssStatus(status);
+      setIsCollecting(status.is_running);
+    } catch {}
+  }, []);
+
+  // Обновляем статус при событии feeds-updated с задержкой —
+  // background task добавляет статьи в processed_articles асинхронно
   useEffect(() => {
-    const loadStatus = async () => {
-      try {
-        const status = await api.getRssStatus();
-        setRssStatus(status);
-        setIsCollecting(status.is_running);
-      } catch {}
+    const handler = () => {
+      setTimeout(loadStatus, 5_000);
+      setTimeout(loadStatus, 12_000);
     };
+    window.addEventListener("feeds-updated", handler);
+    return () => window.removeEventListener("feeds-updated", handler);
+  }, [loadStatus]);
+
+  useEffect(() => {
     loadStatus();
     const interval = setInterval(loadStatus, 60_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadStatus]);
 
   const handleCollect = async () => {
     if (isCollecting) return;

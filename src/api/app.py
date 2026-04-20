@@ -1093,6 +1093,7 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: 
                 with _conn.cursor() as cur:
                     cur.execute(f"DELETE FROM {POSTGRES_TABLE_FEED_STATE} WHERE source = %s", (body.name,))
                 collect_rss(rss_feeds={body.name: body.url})
+            # Статьи попадут в RAG при следующем запуске text extraction (вручную или по расписанию)
         except Exception as e:
             logger.warning("Ошибка при начальном сборе ленты %s: %s", body.url, e)
 
@@ -1483,8 +1484,10 @@ def summarize_article_endpoint(article_id: int, force: bool = False, body: Summa
     if not article:
         raise HTTPException(status_code=404, detail="Статья не найдена")
 
-    # 1. Кэш — возвращаем сразу (если не force)
-    if article.get("ai_summary") and not force:
+    # 1. Кэш — возвращаем сразу (если не force и credentials не переданы)
+    # Если переданы gigachat_credentials — всегда перезаписываем (в т.ч. BART-резюме)
+    has_credentials = bool(body.gigachat_credentials)
+    if article.get("ai_summary") and not force and not has_credentials:
         return SummarizeResponse(ai_summary=article["ai_summary"], cached=True)
 
     # 2. Извлекаем full_text если нет

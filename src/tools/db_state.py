@@ -1182,8 +1182,9 @@ def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> 
         if feed_updates:
             set_clause = ", ".join(f"{k} = %s" for k in feed_updates)
             cur.execute(
-                f"UPDATE feeds SET {set_clause} WHERE id = %s;",
-                list(feed_updates.values()) + [feed_id],
+                f"UPDATE feeds SET {set_clause} WHERE id = %s"
+                f" AND id IN (SELECT feed_id FROM user_feeds WHERE user_id = %s);",
+                list(feed_updates.values()) + [feed_id, _user_id],
             )
         if user_updates:
             set_clause = ", ".join(f"{k} = %s" for k in user_updates)

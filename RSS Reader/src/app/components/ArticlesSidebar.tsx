@@ -104,7 +104,7 @@ async function fetchArticles(
         ? source.feedIds
         : [parseInt(source.feedId)];
       return ids.length > 1
-        ? api.getArticlesByFeedIds(ids)
+        ? api.getArticlesByFeedIds(ids, page)
         : api.getFeedArticles(ids[0], page, false);
     }
     case "topic":

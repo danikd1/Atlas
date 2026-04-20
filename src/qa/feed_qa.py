@@ -60,8 +60,10 @@ def _cosine_sim(a: List[float], b: List[float]) -> float:
     return float(np.dot(va, vb) / denom)
 
 
-def _build_prompt(query: str, context_block: str, language: str) -> list[dict]:
+def _build_prompt(query: str, context_block: str, language: str, n_fragments: int = 0) -> list[dict]:
+    range_hint = f" Используй ТОЛЬКО номера от [1] до [{n_fragments}]." if n_fragments else ""
     if language == "en":
+        range_hint_en = f" Use ONLY reference numbers from [1] to [{n_fragments}]." if n_fragments else ""
         return [
             {
                 "role": "system",
@@ -75,7 +77,7 @@ def _build_prompt(query: str, context_block: str, language: str) -> list[dict]:
                 "content": (
                     f"Article fragments:\n\n{context_block}\n\n"
                     f"Question: {query}\n\n"
-                    "Answer in English. Reference fragments by [number] when relevant."
+                    f"Answer in English. Reference fragments by [number] when relevant.{range_hint_en}"
                 ),
             },
         ]
@@ -84,8 +86,10 @@ def _build_prompt(query: str, context_block: str, language: str) -> list[dict]:
             "role": "system",
             "content": (
                 "Ты — помощник, отвечающий ИСКЛЮЧИТЕЛЬНО на основе приведённых фрагментов статей. "
+                "Не используй знания из других источников. "
                 "Если информации недостаточно — прямо скажи об этом. "
-                "Ссылайся на номер фрагмента в квадратных скобках."
+                f"Ссылайся ТОЛЬКО на номера фрагментов из контекста.{range_hint} "
+                "Упоминай [N] прямо внутри предложения. НЕ выводи список номеров отдельной строкой."
             ),
         },
         {
@@ -93,17 +97,34 @@ def _build_prompt(query: str, context_block: str, language: str) -> list[dict]:
             "content": (
                 f"Фрагменты статей:\n\n{context_block}\n\n"
                 f"Вопрос: {query}\n\n"
-                "Ответь по-русски. Если опираешься на фрагмент — упоминай его номер [N]."
+                f"Ответь по-русски, опираясь ТОЛЬКО на фрагменты выше.{range_hint} "
+                "Вставляй номер [N] внутрь предложения где используешь фрагмент. "
+                "Не выводи отдельную строку со списком номеров."
             ),
         },
     ]
+
+
+def _strip_leading_citations(text: str) -> str:
+    """Убирает строки вида '[1], [2], [3]' в начале ответа — артефакт GigaChat."""
+    import re
+    lines = text.splitlines()
+    while lines:
+        stripped = lines[0].strip()
+        # строка состоит только из [N], [N], ... — удаляем
+        if re.fullmatch(r"(\[\d+\][,\s]*)+", stripped):
+            lines.pop(0)
+        else:
+            break
+    return "\n".join(lines).strip()
 
 
 def _call_gigachat(messages: list, options: FeedQAOptions) -> str:
     client = create_gigachat_client(credentials=options.gigachat_credentials, model=options.gigachat_model)
     try:
         result = client.chat({"messages": messages, "temperature": 0.1})
-        return (result.choices[0].message.content or "").strip()
+        raw = (result.choices[0].message.content or "").strip()
+        return _strip_leading_citations(raw)
     except Exception as e:
         logger.exception("FeedQA: ошибка LLM: %s", e)
         return f"Ошибка при обращении к LLM: {e}"
@@ -175,16 +196,11 @@ def _answer_via_rag(
 
     context_lines: List[str] = []
     sources: List[FeedQASource] = []
-    seen_links: set = set()
-    for idx, chunk in enumerate(top_chunks, 1):
-        snippet = clean_text_for_llm(chunk.text_payload or "", max_chars=800)
-        context_lines.append(
-            f"[{idx}] {chunk.title}\n"
-            f"Источник: {chunk.source} | {chunk.link}\n"
-            f"{snippet}\n"
-        )
-        if chunk.link not in seen_links:
-            seen_links.add(chunk.link)
+    link_to_idx: dict = {}
+    for chunk in top_chunks:
+        if chunk.link not in link_to_idx:
+            link_to_idx[chunk.link] = len(link_to_idx) + 1
+            snippet = clean_text_for_llm(chunk.text_payload or "", max_chars=800)
             sources.append(FeedQASource(
                 link=chunk.link,
                 title=chunk.title,
@@ -193,14 +209,21 @@ def _answer_via_rag(
                 snippet=snippet[:300],
                 article_id=chunk.article_id,
             ))
+        idx = link_to_idx[chunk.link]
+        snippet = clean_text_for_llm(chunk.text_payload or "", max_chars=800)
+        context_lines.append(
+            f"[{idx}] {chunk.title}\n"
+            f"Источник: {chunk.source} | {chunk.link}\n"
+            f"{snippet}\n"
+        )
 
-    messages = _build_prompt(query, "\n".join(context_lines), options.language)
+    messages = _build_prompt(query, "\n".join(context_lines), options.language, n_fragments=len(context_lines))
     answer_text = _call_gigachat(messages, options)
 
     return FeedQAResult(
         answer=answer_text,
         sources=sources,
-        article_count=len(seen_links),
+        article_count=len(sources),
     )
 
 
@@ -272,7 +295,7 @@ def _inmemory_similarity(
             article_id=row.get("id") or 0,
         ))
 
-    messages = _build_prompt(query, "\n".join(context_lines), options.language)
+    messages = _build_prompt(query, "\n".join(context_lines), options.language, n_fragments=len(context_lines))
     answer_text = _call_gigachat(messages, options)
 
     return FeedQAResult(
