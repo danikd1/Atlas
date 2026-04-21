@@ -50,28 +50,38 @@ export function ArticleDetailPage() {
     const cached = translationCache.get(articleId);
     setTranslation(cached);
     setShowingTranslation(cached !== null);
-    loadArticle(articleId);
+
+    const controller = new AbortController();
+    loadArticle(articleId, controller.signal);
+    return () => controller.abort(); // отменяем запрос при уходе на другую статью
   }, [id]);
 
-  const loadArticle = async (articleId: number) => {
+  const loadArticle = async (articleId: number, signal?: AbortSignal) => {
     setIsLoading(true);
     setNotFound(false);
     try {
       const data = await api.getArticleById(articleId);
+      if (signal?.aborted) return;
       setArticle(data);
 
       if (!data.is_read) {
         try {
           await api.markArticleRead(data.link);
-          window.dispatchEvent(new CustomEvent("feeds-updated"));
+          if (signal?.aborted) return;
+          // article-read вместо feeds-updated: только счётчик в сайдбаре обновится,
+          // но ArticlesSidebar не будет перезагружать список (сбрасывать позицию)
+          window.dispatchEvent(new CustomEvent("article-read"));
         } catch (e) {
           console.error("Ошибка пометки прочитанной:", e);
         }
       }
     } catch (e) {
+      if (signal?.aborted) return;
       setNotFound(true);
     } finally {
-      setIsLoading(false);
+      if (!signal?.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 

@@ -143,20 +143,25 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
   }, [key]);
 
   const loadInitial = async () => {
+    const currentKey = keyRef.current;
     setIsLoading(true);
     try {
       const data = await fetchArticles(source, 1);
+      if (keyRef.current !== currentKey) return; // ушли на другую ленту пока грузилось
       setArticles(data);
       setPage(1);
       setHasMore(
         !NO_PAGINATION.includes(source.kind) && data.length === PAGE_SIZE
       );
     } catch (e) {
+      if (keyRef.current !== currentKey) return;
       console.error("Ошибка загрузки статей:", e);
       setArticles([]);
       setHasMore(false);
     } finally {
-      setIsLoading(false);
+      if (keyRef.current === currentKey) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -183,7 +188,9 @@ export function ArticlesSidebar({ source, onClose }: ArticlesSidebarProps) {
       );
       try {
         await api.markArticleRead(article.link);
-        window.dispatchEvent(new CustomEvent("feeds-updated"));
+        // article-read вместо feeds-updated: только счётчик в сайдбаре обновится,
+        // но ArticlesSidebar не будет перезагружать список (сбрасывать позицию)
+        window.dispatchEvent(new CustomEvent("article-read"));
       } catch (e) {
         console.error("Ошибка пометки прочитанной:", e);
       }

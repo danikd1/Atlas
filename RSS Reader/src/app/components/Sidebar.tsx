@@ -425,7 +425,12 @@ function SidebarContent({ selectedSource, setSelectedSource }: SidebarContentPro
   useEffect(() => {
     const handler = () => loadData();
     window.addEventListener("feeds-updated", handler);
-    return () => window.removeEventListener("feeds-updated", handler);
+    // article-read: только обновляем счётчики непрочитанных, не ждём крупных изменений
+    window.addEventListener("article-read", handler);
+    return () => {
+      window.removeEventListener("feeds-updated", handler);
+      window.removeEventListener("article-read", handler);
+    };
   }, []);
 
   const loadStatus = useCallback(async () => {

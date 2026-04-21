@@ -1467,9 +1467,10 @@ def summarize_article_endpoint(article_id: int, force: bool = False, body: Summa
 
     Логика:
     1. Если ai_summary уже есть в БД и force=False — возвращает его мгновенно (cached=true).
-    2. Если full_text отсутствует — извлекает с оригинального сайта через trafilatura.
-    3. Вызывает summarize_article() из llm_utils (GigaChat → ошибка если нет credentials).
-    4. Сохраняет результат в processed_articles.ai_summary для кэширования.
+    2. Если full_text отсутствует — пытается извлечь с оригинального сайта через trafilatura.
+    3. Если full_text всё равно недоступен — использует краткое RSS-описание (summary) как fallback.
+    4. Вызывает summarize_article() из llm_utils (GigaChat → ошибка если нет credentials).
+    5. Сохраняет результат в processed_articles.ai_summary для кэширования.
 
     force=true — пересчитать даже если кэш есть (например, при смене модели).
     """
@@ -1502,11 +1503,16 @@ def summarize_article_endpoint(article_id: int, force: bool = False, body: Summa
             logger.warning("Не удалось извлечь full_text для article_id=%s: %s", article_id, e)
 
     if not full_text:
-        return SummarizeResponse(
-            ai_summary=None,
-            cached=False,
-            error="Не удалось извлечь текст статьи",
-        )
+        # Fallback: используем краткое описание из RSS если full_text недоступен
+        rss_summary = article.get("summary") or ""
+        if not rss_summary.strip():
+            return SummarizeResponse(
+                ai_summary=None,
+                cached=False,
+                error="Полный текст недоступен, описание отсутствует",
+            )
+        logger.info("article_id=%s: full_text недоступен, суммаризируем по RSS summary", article_id)
+        full_text = rss_summary
 
     # 3. Суммаризация через GigaChat
     try:

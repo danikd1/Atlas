@@ -113,6 +113,7 @@ export function TopicMapPage() {
   const [taskError, setTaskError] = useState<string | null>(null);
   const [daysBack, setDaysBack] = useState(30);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isRunningRef = useRef(false); // синхронная защита от двойного клика
 
   useEffect(() => {
     loadTopics();
@@ -138,6 +139,8 @@ export function TopicMapPage() {
   };
 
   const handleRun = async () => {
+    if (isRunningRef.current) return; // защита от двойного клика до ре-рендера
+    isRunningRef.current = true;
     setTaskStatus("pending");
     setTaskProgress(0);
     setTaskMessage("Запускаем пайплайн...");
@@ -146,6 +149,7 @@ export function TopicMapPage() {
       const result = await api.bertopicRun({ skip_rag: true, days_back: daysBack });
       startPolling(result.task_id);
     } catch (e: any) {
+      isRunningRef.current = false;
       setTaskStatus("error");
       setTaskError(e.message || "Ошибка запуска");
     }
@@ -162,10 +166,12 @@ export function TopicMapPage() {
         if (s.status === "done") {
           clearInterval(pollRef.current!);
           pollRef.current = null;
+          isRunningRef.current = false;
           loadTopics();
         } else if (s.status === "error") {
           clearInterval(pollRef.current!);
           pollRef.current = null;
+          isRunningRef.current = false;
           setTaskError(s.error || "Неизвестная ошибка");
         }
       } catch { /* продолжаем пробовать */ }

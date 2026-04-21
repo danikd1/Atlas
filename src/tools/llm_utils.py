@@ -390,14 +390,15 @@ def generate_feed_descriptions_batch(feeds: list) -> dict:
             f"Ответь строго в формате JSON-массива:\n"
             f'[{{"index": 1, "description": "..."}}, {{"index": 2, "description": "..."}}, ...]'
         )
-        client = create_gigachat_client()
+        from config.config import GIGACHAT_CREDENTIALS, GIGACHAT_MODEL
+        client = create_gigachat_client(credentials=GIGACHAT_CREDENTIALS, model=GIGACHAT_MODEL)
         with client:
             from gigachat.models import Chat, Messages, MessagesRole
             response = client.chat(
                 Chat(
                     messages=[Messages(role=MessagesRole.USER, content=prompt)],
                     temperature=0.3,
-                    max_tokens=1000,
+                    max_tokens=2000,
                 )
             )
         import json, re

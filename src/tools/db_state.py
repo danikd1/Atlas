@@ -1415,6 +1415,24 @@ def import_catalog_feeds(conn) -> int:
             row = cur.fetchone()
             if row and row["inserted"]:
                 count += 1
+
+        # Убираем из каталога ленты, которых больше нет в конфиге
+        config_urls = [
+            (feed["url"] if isinstance(feed, dict) else feed)
+            for feed in RSS_FEEDS.values()
+        ]
+        if config_urls:
+            cur.execute(
+                """
+                UPDATE feeds SET is_catalog = FALSE
+                WHERE is_catalog = TRUE AND url != ALL(%s::text[]);
+                """,
+                (config_urls,),
+            )
+            removed = cur.rowcount
+            if removed:
+                logger.info("import_catalog_feeds: убрано %d лент из каталога (нет в конфиге)", removed)
+
     conn.commit()
     logger.info("import_catalog_feeds: добавлено %d новых лент в каталог", count)
     return count
@@ -1794,7 +1812,8 @@ def update_article_full_text(conn, article_id: int, full_text: str) -> None:
 def get_article_for_summarize(conn, article_id: int) -> Optional[dict]:
     """
     Возвращает минимальный набор полей для эндпоинта суммаризации:
-    {id, link, title, full_text, ai_summary}.
+    {id, link, title, full_text, summary, ai_summary}.
+    summary — краткое описание из RSS (fallback когда full_text недоступен).
     Возвращает None если статья не найдена.
     """
     if conn is None:
@@ -1802,7 +1821,7 @@ def get_article_for_summarize(conn, article_id: int) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, link, title, full_text, ai_summary
+            SELECT id, link, title, full_text, summary, ai_summary
             FROM processed_articles
             WHERE id = %s;
             """,

@@ -31,7 +31,7 @@ function commonNamePrefix(names: string[]): string | null {
       prefix.push(word);
     } else break;
   }
-  return prefix.length > 0 ? prefix.join(" ") : null;
+  return prefix.length > 0 ? prefix.join(" ").replace(/[:\s]+$/, "") : null;
 }
 
 function FeedIcon({ faviconUrl, category }: { faviconUrl: string | null; category: string | null }) {
@@ -154,13 +154,17 @@ export function HomePage() {
   const handleCardClick = (e: React.MouseEvent, representative: ApiCatalogFeed, allFeeds: ApiCatalogFeed[], sourceName: string) => {
     e.stopPropagation();
     if (!setSelectedSource) return;
-    setSelectedSource({
-      kind: "feed",
-      feedId: representative.id.toString(),
-      feedIds: allFeeds.map((f) => f.id),
-      title: sourceName,
-      favicon_url: representative.favicon_url ?? undefined,
-    });
+    if (activeKey === `feed:${representative.id.toString()}`) {
+      setSelectedSource(null);
+    } else {
+      setSelectedSource({
+        kind: "feed",
+        feedId: representative.id.toString(),
+        feedIds: allFeeds.map((f) => f.id),
+        title: sourceName,
+        favicon_url: representative.favicon_url ?? undefined,
+      });
+    }
   };
 
   const formatSubscribers = (count: number): string => {
@@ -251,7 +255,7 @@ export function HomePage() {
       />
 
       {/* Content */}
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="relative z-10 max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="text-center mb-12">
         <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
@@ -338,7 +342,7 @@ export function HomePage() {
             Загрузка каталога...
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredGroups.map(({ domain, feeds, representative, sourceName, latestPostAt, isSubscribed, categories }) => {
               const hasMultiple = feeds.length > 1;
               const isActive = activeKey === `feed:${representative.id.toString()}`;

@@ -188,7 +188,7 @@ export function Root() {
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
-      <header ref={headerRef} className="relative bg-white border-b border-gray-200 z-10 flex-shrink-0">
+      <header ref={headerRef} className="relative bg-white border-b border-gray-200 z-50 flex-shrink-0">
         <div className="px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-4">
 
           {/* Logo */}
