@@ -22,10 +22,10 @@ import pandas as pd
 from ..tools.db_state import (
     ensure_tables,
     get_connection,
+    get_existing_links,
     get_feeds_as_dict,
     load_feed_states,
     load_feed_url_id_map,
-    load_processed_links,
     update_feed_states_from_seen,
     update_feed_status,
     update_state_with_articles,
@@ -308,10 +308,9 @@ def collect_articles_for_window(
             "feeds_failed": 0
         }
     
-    # Подключение к БД и загрузка уже обработанных ссылок (для межзапусковой дедупликации)
+    # Подключение к БД
     conn = get_connection()
     ensure_tables(conn)
-    processed_links = load_processed_links(conn)
     # Загружаем last_processed_published_at по каждому источнику для фильтрации только новых статей
     feed_states = load_feed_states(conn)
     # Загружаем {url: feed_id} чтобы проставить feed_id на каждую статью при сохранении
@@ -325,9 +324,9 @@ def collect_articles_for_window(
     feeds_failed = 0  # Счётчик лент, которые завершились с критической ошибкой
     per_feed_max_published: Dict[str, datetime] = {} # По каждой ленте — макс. дата среди всех увиденных статей.
     per_feed_new_count: Dict[str, int] = {} # По каждой ленте — сколько новых статей добавили в этом запуске (для вывода в лог)
-    
+
     start_time = time.time()
-    
+
     for name, url in rss_feeds.items():
         try:
             # Для каждого источника используем его last_processed_published_at, если он есть
@@ -336,7 +335,7 @@ def collect_articles_for_window(
                 logger.debug(
                     f"Источник '{name}': используем last_processed_published_at = {min_published_dt}"
                 )
-            
+
             # Временный лог, чтобы видеть, на какой ленте может происходить «зависание»
             logger.info("Парсинг RSS-ленты '%s' (%s)...", name, url)
 
@@ -348,7 +347,7 @@ def collect_articles_for_window(
                 max_retries=max_retries,
                 retry_delay=retry_delay
             )
-            
+
             for art in articles:
                 total_parsed += 1
                 link = art["link"]
@@ -358,11 +357,6 @@ def collect_articles_for_window(
                     current = per_feed_max_published.get(name)
                     if current is None or pub_dt > current:
                         per_feed_max_published[name] = pub_dt
-
-                # Пропускаем статьи, которые уже были обработаны в прошлых запусках
-                if link in processed_links:
-                    skipped_already_processed += 1
-                    continue
 
                 # Добавляем имя источника (ключ из RSS_FEEDS), чтобы можно было хранить состояние по каждому источнику
                 art["source"] = name
@@ -377,30 +371,42 @@ def collect_articles_for_window(
                     if len(s) > SUMMARY_TRUNCATE_MAX_CHARS:
                         art["summary"] = s[:SUMMARY_TRUNCATE_MAX_CHARS].strip()
 
+                # Дедупликация внутри текущего запуска (один URL из нескольких лент)
                 if link in seen_links:
                     skipped_duplicates += 1
                     continue
-                
+
                 seen_links.add(link)
                 all_articles.append(art)
-                per_feed_new_count[name] = per_feed_new_count.get(name, 0) + 1
-        
+
             update_feed_status(conn, url, error=None)
         except Exception as e:
             feeds_failed += 1
             logger.error(f"Критическая ошибка при обработке ленты '{name}' ({url}): {e}")
             update_feed_status(conn, url, error=str(e))
             continue
-    
+
+    # Один батч-запрос к БД: из всех кандидатов этого запуска узнаём какие уже есть в processed_articles.
+    # Заменяет load_processed_links() — больше не грузим всю таблицу в память.
+    candidate_links = [art["link"] for art in all_articles]
+    existing_in_db = get_existing_links(conn, candidate_links)
+    new_articles = [art for art in all_articles if art["link"] not in existing_in_db]
+    skipped_already_processed = len(all_articles) - len(new_articles)
+
+    # per_feed_new_count считаем только по действительно новым статьям
+    for art in new_articles:
+        name = art.get("source", "")
+        per_feed_new_count[name] = per_feed_new_count.get(name, 0) + 1
+
     end_time = time.time()
     elapsed = end_time - start_time
-    
-    # Сохраняем новые статьи в БД и обновляем last_processed_published_at по каждому источнику
-    update_state_with_articles(conn, all_articles)
+
+    # Сохраняем только новые статьи в БД
+    update_state_with_articles(conn, new_articles)
     # Обновляем last_processed_published_at по всем лентам, где что-то видели (не только по лентам с новыми статьями)
     update_feed_states_from_seen(conn, per_feed_max_published)
 
-    df = pd.DataFrame(all_articles)
+    df = pd.DataFrame(new_articles)
     
     stats = {
         "total_parsed": total_parsed,

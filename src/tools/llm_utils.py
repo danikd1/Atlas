@@ -63,7 +63,7 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
     Суммаризация через facebook/bart-large-cnn (fallback).
 
     BART — английская модель, результат на том же языке что и входной текст.
-    Для русских статей используйте IlyaGusev/mbart_ru_sum_gazeta (см. config.py).
+    Для русских статей используется cointegrated/rut5-base-absum (см. text_extraction_worker.py).
 
     Args:
         title: Заголовок статьи (добавляется к тексту для контекста).
@@ -124,6 +124,7 @@ def create_gigachat_client(credentials: Optional[str] = None, model: Optional[st
             credentials=credentials,
             verify_ssl_certs=GIGACHAT_VERIFY_SSL,
             model=effective_model,
+            timeout=120,  # 2 мин — после этого GigaChat считается зависшим
         )
         logger.info("✅ GigaChat клиент инициализирован")
         return client

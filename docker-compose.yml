@@ -61,6 +61,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
       WORKER_RAG_URL: http://worker-rag:8003
+    volumes:
+      - hf-cache:/app/.cache/huggingface
 
   worker-rag:
     build: .

@@ -805,6 +805,9 @@ def upsert_rag_documents(
 def load_processed_links(conn) -> Set[str]:
     """
     Загружает множество уже обработанных ссылок (для дедупликации между запусками).
+
+    УСТАРЕЛО: загружает всю таблицу в память. Используйте get_existing_links()
+    которая принимает только кандидатов из текущего RSS-запроса.
     """
     if conn is None:
         return set()
@@ -813,6 +816,25 @@ def load_processed_links(conn) -> Set[str]:
         cur.execute(f"SELECT link FROM {POSTGRES_TABLE_PROCESSED_ARTICLES};")
         rows = cur.fetchall()
         return {row["link"] for row in rows if row.get("link")}
+
+
+def get_existing_links(conn, candidate_links: List[str]) -> Set[str]:
+    """
+    Возвращает подмножество candidate_links которые уже есть в processed_articles.
+
+    Эффективная замена load_processed_links: вместо загрузки всей таблицы
+    делает один точечный запрос только по ссылкам из текущего RSS-батча.
+    При 50 лентах × 20 статей = ~1000 кандидатов вместо 100k+ строк.
+    """
+    if not candidate_links or conn is None:
+        return set()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT link FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} WHERE link = ANY(%s)",
+            (candidate_links,),
+        )
+        return {row["link"] for row in cur.fetchall()}
 
 
 def load_articles_for_window(conn, hours_back: int):

@@ -157,49 +157,6 @@ class RssCollectResponse(BaseModel):
     )
 
 
-class PipelineRunRequest(BaseModel):
-    """Параметры запуска пайплайна обработки статей (фильтрация, эмбеддинги, суммаризация, RAG).
-
-    RSS-сбор в этом эндпоинте НЕ выполняется — используйте POST /api/rss/collect
-    для обновления данных из источников.
-    """
-
-    taxonomy_selection: Optional[Dict[str, Optional[str]]] = Field(
-        default=None,
-        description="Узел таксономии для фильтрации (discipline, ga, activity). Если не передан, используется конфигурация по умолчанию.",
-        examples=[{"discipline": "Engineering", "ga": "DevOps", "activity": None}],
-    )
-    collection_name: Optional[str] = Field(
-        default=None,
-        description="Название создаваемой коллекции. Если не указано, генерируется автоматически на основе таксономии.",
-        examples=["DevOps практики"],
-    )
-
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "taxonomy_selection": {"discipline": "Engineering", "ga": "DevOps", "activity": None},
-                "collection_name": "DevOps практики",
-            }
-        }
-    }
-
-
-class PipelineRunResponse(BaseModel):
-    """Результат выполнения пайплайна."""
-
-    success: bool = Field(description="Признак успешного завершения пайплайна.")
-    articles_count: int = Field(
-        default=0,
-        description="Количество статей, прошедших все этапы фильтрации и сохранённых в базу знаний.",
-        examples=[42],
-    )
-    message: str = Field(
-        default="",
-        description="Человекочитаемое сообщение о результате выполнения.",
-        examples=["Пайплайн завершён. Обработано статей: 42."],
-    )
-
 
 class QARequest(BaseModel):
     """Запрос к Q&A-ассистенту по конкретной коллекции."""
@@ -522,7 +479,7 @@ class BertopicRunRequest(BaseModel):
     n_categories: int = Field(default=10, ge=2, description="Количество мета-категорий KMeans.")
     skip_rag: bool = Field(default=True, description="Пропустить генерацию RAG-чанков (быстрее).")
     source_filter: Optional[str] = Field(default=None, description="Фильтр по источнику (ILIKE).")
-    limit: Optional[int] = Field(default=None, ge=100, description="Лимит статей (по умолчанию все).")
+    limit: Optional[int] = Field(default=None, ge=100, description="Лимит статей (по умолчанию все статьи подписок пользователя, рекомендуется не более 5000).")
     days_back: Optional[int] = Field(default=None, ge=1, description="Статьи за последние N дней (None = все).")
     gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
     gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")

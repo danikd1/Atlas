@@ -386,7 +386,8 @@ GIGACHAT_SUMMARIZATION_ENABLED: bool = (
 # BART fallback: модель для суммаризации когда GigaChat недоступен.
 # sshleifer/distilbart-cnn-6-6 — английский, ~400 MB, ~90% качества bart-large-cnn, в 2 раза быстрее
 # facebook/bart-large-cnn      — английский, ~1.6 GB, высокое качество
-# IlyaGusev/mbart_ru_sum_gazeta — русский, ~900 MB (используется автоматически для RU-статей)
+# cointegrated/rut5-base-absum   — русский, ~250 MB, T5-based, в ~10x быстрее mBART на CPU (используется автоматически для RU-статей)
+# IlyaGusev/mbart_ru_sum_gazeta  — русский, ~2.3 GB, mBART, высокое качество но крайне медленный на CPU (~50 мин/статья)
 BART_SUMMARIZATION_MODEL = "sshleifer/distilbart-cnn-6-6"
 BART_SUMMARY_MAX_LENGTH = 130   # токенов в резюме
 BART_SUMMARY_MIN_LENGTH = 40    # токенов минимум

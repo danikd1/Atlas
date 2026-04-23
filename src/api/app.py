@@ -46,12 +46,10 @@ from .schemas import (
     FolderCreate,
     FolderItem,
     FolderUpdate,
-    PipelineRunRequest,
     FeedDigestRequest,
     FeedQARequest,
     FeedQAResponse,
     FeedQASourceItem,
-    PipelineRunResponse,
     QARequest,
     QAResponse,
     QASource,
@@ -167,7 +165,6 @@ app = FastAPI(
         "по коллекциям статей из открытых источников.\n\n"
         "**Основные сценарии:**\n"
         "- Подбор темы через агент-роутер (`/api/router`)\n"
-        "- Запуск пайплайна сбора и индексации (`/api/pipeline/run`)\n"
         "- Просмотр коллекций и статей (`/api/collections`)\n"
         "- Q&A по коллекции с указанием источников (`/api/qa`)\n"
         "- Формирование дайджеста по разделам (`/api/digest/{collection_id}`)"
@@ -489,29 +486,6 @@ def rss_index_resume(current_user: dict = Depends(get_current_user)):
     return result
 
 
-@app.post(
-    "/api/pipeline/run",
-    tags=["Пайплайн"],
-    summary="Обработать статьи из БД (фильтрация, эмбеддинги, суммаризация, RAG)",
-    response_model=PipelineRunResponse,
-    response_description="Результат выполнения: количество обработанных статей",
-)
-def run_pipeline_endpoint(body: PipelineRunRequest, current_user: dict = Depends(get_current_user)):
-    try:
-        from src.main import run_pipeline
-        df = run_pipeline(
-            taxonomy_selection_override=body.taxonomy_selection,
-            collection_name=body.collection_name,
-        )
-        count = len(df) if df is not None else 0
-        return PipelineRunResponse(
-            success=True,
-            articles_count=count,
-            message=f"Пайплайн завершён. Обработано статей: {count}.",
-        )
-    except Exception as e:
-        logger.exception("Pipeline error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post(
@@ -877,8 +851,13 @@ def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_cu
     import feedparser
     from urllib.parse import urlparse
     try:
-        import socket; socket.setdefaulttimeout(10)
-        feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
+        import socket
+        _old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(10)
+        try:
+            feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
+        finally:
+            socket.setdefaulttimeout(_old_timeout)
         if feed.bozo and not feed.entries:
             return FeedValidateResponse(valid=False, error="Не удалось распознать RSS-ленту")
         name = feed.feed.get("title") or urlparse(body.url).netloc
@@ -939,7 +918,13 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: 
 
             # Привязываем существующие статьи по ссылкам из RSS
             # (нужно при повторной подписке — статьи могли быть под другим feed_id)
-            _rss = _fp.parse(body.url)
+            import socket as _socket
+            _old_to = _socket.getdefaulttimeout()
+            _socket.setdefaulttimeout(15)
+            try:
+                _rss = _fp.parse(body.url)
+            finally:
+                _socket.setdefaulttimeout(_old_to)
             _links = [e.get("link") for e in _rss.entries if e.get("link")]
             if _links:
                 with _conn.cursor() as cur:

@@ -114,6 +114,7 @@ def test_failed_extraction_marks_error():
          patch("src.tools.db_state.get_articles_without_summary", return_value=[]), \
          patch("src.tools.db_state.update_article_full_text") as mock_update, \
          patch("src.tools.db_state.mark_fulltext_error") as mock_error, \
+         patch("src.tools.db_state.mark_domain_fulltext_error", return_value=0), \
          patch("src.tools.text_extraction.extract_full_text", return_value=None):
 
         result = extract_pending_articles(conn, batch_size=10, domain_delay=0)
@@ -165,6 +166,7 @@ def test_extraction_exception_marks_error():
     with patch("src.tools.db_state.get_articles_without_fulltext", return_value=articles), \
          patch("src.tools.db_state.get_articles_without_summary", return_value=[]), \
          patch("src.tools.db_state.mark_fulltext_error") as mock_error, \
+         patch("src.tools.db_state.mark_domain_fulltext_error", return_value=0), \
          patch("src.tools.text_extraction.extract_full_text", side_effect=Exception("timeout")):
 
         result = extract_pending_articles(conn, batch_size=10, domain_delay=0)

@@ -84,15 +84,20 @@ def run_async(
 
 # ── Internal pipeline ──────────────────────────────────────────────────────
 
+MAX_ARTICLES_BERTOPIC = 5000  # UMAP квадратично растёт — выше 5k часы на CPU
+
 def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back=None, user_id=None, gigachat_credentials=None, gigachat_model=None):
     _set(task_id, status="running", progress=0.0, message="Инициализация...")
 
     try:
         model_version = datetime.now().strftime("%Y%m%d")
 
+        # Защитный потолок: UMAP при >5k статей может считать часами на CPU
+        effective_limit = min(limit, MAX_ARTICLES_BERTOPIC) if limit else MAX_ARTICLES_BERTOPIC
+
         # ── [1/6] Загрузка статей ──────────────────────────────────────────
         _set(task_id, progress=0.05, message="Загружаем статьи из БД...")
-        docs, meta = _load_articles(limit=limit, source_filter=source_filter, days_back=days_back, user_id=user_id)
+        docs, meta = _load_articles(limit=effective_limit, source_filter=source_filter, days_back=days_back, user_id=user_id)
 
         if len(docs) < 20:
             raise ValueError(

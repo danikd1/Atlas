@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from config.config import BART_SUMMARIZATION_MODEL
 BART_EN_MODEL = BART_SUMMARIZATION_MODEL
-BART_RU_MODEL = "IlyaGusev/mbart_ru_sum_gazeta"
+BART_RU_MODEL = "cointegrated/rut5-base-absum"
 
 # Кэш pipeline по имени модели — два синглтона для EN и RU
 _bart_pipelines: dict = {}
@@ -49,6 +49,8 @@ def _summarize_with_bart_auto(title: str, full_text: str) -> str:
         return ""
 
     model_name = BART_RU_MODEL if (_has_cyrillic(title) or _has_cyrillic(clean[:200])) else BART_EN_MODEL
+    lang = "RU" if model_name == BART_RU_MODEL else "EN"
+    logger.debug("BART[%s] title=%r", lang, (title or "")[:60])
     pipe = _get_bart_pipeline(model_name)
 
     combined = f"{title}. {clean}" if title else clean
@@ -149,31 +151,61 @@ def extract_pending_articles(
             title = article.get("title") or ""
             done_phase1 += 1
 
+            t_start = time.time()
             try:
                 text = extract_full_text(link)
+                t_fetched = time.time()
+                fetch_sec = t_fetched - t_start
+
                 if text:
                     update_article_full_text(conn, article_id, text)
                     extracted += 1
                     domain_extracted += 1
 
                     # BART только если ai_summary ещё не заполнено
+                    bart_sec = 0.0
+                    bart_label = ""
                     if not article.get("ai_summary"):
+                        lang = "RU" if _has_cyrillic(title) else "EN"
                         try:
                             summary = _summarize_with_bart_auto(title, text)
+                            bart_sec = time.time() - t_fetched
+                            bart_label = f"bart[{lang}]={bart_sec:.1f}s"
                             if summary:
                                 save_ai_summary(conn, article_id, summary)
                                 summarized += 1
                                 domain_summarized += 1
                         except Exception as e:
+                            bart_sec = time.time() - t_fetched
+                            bart_label = f"bart[{lang}]=ERR"
                             logger.warning("BART error for %s: %s", link[:80], e)
+
+                    print(
+                        f"  [{done_phase1}/{total_phase1}] ✓  {len(text):>6} chars"
+                        f"  fetch={fetch_sec:.1f}s  {bart_label}"
+                        f"  {link[:80]}",
+                        flush=True,
+                    )
                 else:
+                    fetch_sec = time.time() - t_start
                     mark_fulltext_error(conn, article_id)
                     failed += 1
                     domain_failed += 1
+                    print(
+                        f"  [{done_phase1}/{total_phase1}] ✗ нет текста"
+                        f"  fetch={fetch_sec:.1f}s"
+                        f"  {link[:80]}",
+                        flush=True,
+                    )
             except Exception as e:
+                elapsed = time.time() - t_start
                 mark_fulltext_error(conn, article_id)
                 failed += 1
                 domain_failed += 1
+                print(
+                    f"  [{done_phase1}/{total_phase1}] ✗ ошибка ({elapsed:.1f}s): {e}  {link[:80]}",
+                    flush=True,
+                )
 
             time.sleep(domain_delay)
 

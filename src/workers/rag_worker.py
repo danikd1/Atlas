@@ -71,8 +71,14 @@ def _do_indexing() -> None:
 
         # Крутимся пока есть что индексировать
         while True:
-            # Проверяем паузу перед каждым батчем
-            _pause_event.wait()
+            # Проверяем паузу перед каждым батчем.
+            # timeout=3600 — защита от вечного зависания если /resume никогда не придёт.
+            _pause_event.wait(timeout=3600)
+            if not _pause_event.is_set():
+                # Час прошёл, resume так и не пришёл — снимаем паузу автоматически
+                logger.warning("RAG worker: пауза длилась >1 часа, снимаем автоматически.")
+                _pause_event.set()
+                _state["paused"] = False
 
             result = index_pending_articles(conn)
             total_indexed += result["indexed"]
