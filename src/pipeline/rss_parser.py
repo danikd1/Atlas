@@ -164,8 +164,13 @@ def parse_rss(
     last_error = None
     for attempt in range(max_retries):
         try:
-            # feedparser не поддерживает timeout напрямую, но используем retry
-            feed = feedparser.parse(feed_url)
+            # feedparser не поддерживает timeout напрямую — используем socket.setdefaulttimeout
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout)
+            try:
+                feed = feedparser.parse(feed_url)
+            finally:
+                socket.setdefaulttimeout(old_timeout)
             
             # Проверка на ошибки парсинга
             if hasattr(feed, 'bozo') and feed.bozo:

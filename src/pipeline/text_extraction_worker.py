@@ -17,7 +17,8 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-BART_EN_MODEL = "facebook/bart-large-cnn"
+from config.config import BART_SUMMARIZATION_MODEL
+BART_EN_MODEL = BART_SUMMARIZATION_MODEL
 BART_RU_MODEL = "IlyaGusev/mbart_ru_sum_gazeta"
 
 # Кэш pipeline по имени модели — два синглтона для EN и RU
@@ -130,11 +131,16 @@ def extract_pending_articles(
     total_phase1 = sum(min(len(v), per_domain_limit) for v in by_domain.values())
     done_phase1 = 0
 
+    # Статистика по доменам для итогового вывода
+    domain_stats: dict = {}
+
     if total_phase1:
         print(f"\n[worker] Фаза 1: извлечение текстов — {total_phase1} статей из {len(by_domain)} доменов", flush=True)
 
     for domain, domain_articles in by_domain.items():
         domain_extracted = 0
+        domain_summarized = 0
+        domain_failed = 0
         domain_batch = domain_articles[:per_domain_limit]
 
         for article in domain_batch:
@@ -142,7 +148,6 @@ def extract_pending_articles(
             link = article["link"]
             title = article.get("title") or ""
             done_phase1 += 1
-            prefix = f"  [{done_phase1}/{total_phase1}]"
 
             try:
                 text = extract_full_text(link)
@@ -150,7 +155,6 @@ def extract_pending_articles(
                     update_article_full_text(conn, article_id, text)
                     extracted += 1
                     domain_extracted += 1
-                    bart_status = ""
 
                     # BART только если ai_summary ещё не заполнено
                     if not article.get("ai_summary"):
@@ -159,22 +163,21 @@ def extract_pending_articles(
                             if summary:
                                 save_ai_summary(conn, article_id, summary)
                                 summarized += 1
-                                bart_status = " + BART"
+                                domain_summarized += 1
                         except Exception as e:
                             logger.warning("BART error for %s: %s", link[:80], e)
-                            bart_status = " + BART ERR"
-
-                    print(f"{prefix} ✓ {len(text):>6} chars{bart_status}  {link[:70]}", flush=True)
                 else:
                     mark_fulltext_error(conn, article_id)
                     failed += 1
-                    print(f"{prefix} ✗ нет текста  {link[:70]}", flush=True)
+                    domain_failed += 1
             except Exception as e:
                 mark_fulltext_error(conn, article_id)
                 failed += 1
-                print(f"{prefix} ✗ ошибка: {e}  {link[:70]}", flush=True)
+                domain_failed += 1
 
             time.sleep(domain_delay)
+
+        domain_stats[domain] = (domain_extracted, domain_summarized, domain_failed)
 
         # Если весь батч домена провалился — домен не поддерживает извлечение (JS-рендеринг и т.д.)
         # Помечаем оставшиеся статьи домена ошибкой чтобы не возвращаться к ним
@@ -182,7 +185,16 @@ def extract_pending_articles(
             skipped_count = mark_domain_fulltext_error(conn, domain)
             if skipped_count > 0:
                 skipped += skipped_count
-                print(f"  [skip] {domain}: весь батч провалился — помечено ещё {skipped_count} статей как ошибка", flush=True)
+
+    if domain_stats:
+        print("", flush=True)
+        max_domain_len = max(len(d) for d in domain_stats)
+        for domain, (d_ext, d_sum, d_fail) in domain_stats.items():
+            print(
+                f"  {domain:<{max_domain_len}}  —  "
+                f"Полных текстов скачано: {d_ext} | AI-резюме: {d_sum} | Ошибок: {d_fail}",
+                flush=True,
+            )
 
     # ── Фаза 2: досуммаризация статей с full_text но без ai_summary ──────────
     to_summarize = get_articles_without_summary(conn, limit=50)
@@ -204,12 +216,11 @@ def extract_pending_articles(
             print(f"  [{i}/{len(to_summarize)}] ✗ ошибка BART  id={article['id']}: {e}", flush=True)
 
     print(
-        f"\n[worker] Готово: извлечено={extracted}  резюме={summarized}"
-        f"  ошибок={failed}  пропущено={skipped}\n",
+        f"\n[worker] Итого: Полных текстов скачано: {extracted} | AI-резюме: {summarized} | Ошибок: {failed} | Пропущено: {skipped}\n",
         flush=True,
     )
     logger.info(
-        "Extraction worker done: extracted=%d summarized=%d failed=%d skipped=%d",
+        "Extraction worker: завершён. Полных текстов скачано: %d | AI-резюме: %d | Ошибок: %d | Пропущено: %d",
         extracted, summarized, failed, skipped,
     )
     return {"extracted": extracted, "summarized": summarized, "failed": failed, "skipped": skipped}

@@ -112,9 +112,11 @@ export function Root() {
 
   useEffect(() => {
     fetchRagStatus();
-    const id = setInterval(fetchRagStatus, 5_000);
+    // Активно (5 сек) когда что-то происходит, редко (30 сек) в простое
+    const isActive = ragStatus?.rag_indexing || ragStatus?.text_extraction_running;
+    const id = setInterval(fetchRagStatus, isActive ? 5_000 : 30_000);
     return () => clearInterval(id);
-  }, [fetchRagStatus]);
+  }, [fetchRagStatus, ragStatus?.rag_indexing, ragStatus?.text_extraction_running]);
 
   const handleRagPauseResume = async () => {
     try {

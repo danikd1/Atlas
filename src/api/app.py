@@ -9,13 +9,12 @@ ReDoc:       http://localhost:8000/redoc
 from __future__ import annotations
 
 import logging
-import threading
+import os
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from apscheduler.schedulers.background import BackgroundScheduler
+import httpx
 from pydantic import BaseModel
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends
@@ -74,135 +73,36 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 
-# ─── Scheduler state ─────────────────────────────────────────────────────────
+# ─── Worker URLs ──────────────────────────────────────────────────────────────
+# В Docker Compose — имена сервисов. Для локальной разработки — localhost.
 
-_scheduler = BackgroundScheduler(timezone="UTC")
-_collect_lock = threading.Lock()
+WORKER_COLLECTOR_URL = os.environ.get("WORKER_COLLECTOR_URL", "http://localhost:8001")
+WORKER_EXTRACTION_URL = os.environ.get("WORKER_EXTRACTION_URL", "http://localhost:8002")
+WORKER_RAG_URL = os.environ.get("WORKER_RAG_URL", "http://localhost:8003")
 
-_scheduler_state: dict = {
-    "last_run_at": None,       # datetime UTC
-    "next_run_at": None,       # datetime UTC
-    "is_running": False,
-    "last_new_articles": None, # int
-}
-
-# ─── Extraction worker state ──────────────────────────────────────────────────
-
-_extraction_lock = threading.Lock()
-_extraction_state: dict = {
-    "running": False,
-    "pending": 0,
-    "last_result": None,  # {"extracted": int, "summarized": int, "failed": int}
-}
-
-# ─── RAG indexer state ────────────────────────────────────────────────────────
-
-_indexer_lock = threading.Lock()
-_indexer_run_event = threading.Event()
-_indexer_run_event.set()  # не на паузе при старте
-_indexer_state: dict = {
-    "running": False,
-    "paused": False,
-    "last_result": None,  # {"indexed": int, "chunks_created": int, "failed": int}
-}
-
-COLLECT_INTERVAL_HOURS = 1
+_WORKER_TIMEOUT = 1  # секунда — внутренняя сеть, быстрый ответ или сразу ошибка
 
 
-def _run_scheduled_collect():
-    """Функция запускаемая по расписанию — собирает все ленты и обновляет состояние."""
-    if not _collect_lock.acquire(blocking=False):
-        logger.info("Scheduler: сбор уже выполняется, пропускаем.")
-        return
+def _call_worker(url: str, method: str = "GET", **kwargs) -> dict:
+    """Делает HTTP-запрос к воркеру. При недоступности возвращает {"error": "unavailable"}."""
     try:
-        _scheduler_state["is_running"] = True
-        logger.info("Scheduler: запускаем сбор RSS...")
-        from src.main import collect_rss
-        stats = collect_rss()
-        new_articles = stats.get("unique_articles", 0)
-        from src.tools.db_state import get_connection, refresh_catalog_stats
-        refresh_catalog_stats(get_connection())
-        _scheduler_state["last_run_at"] = datetime.utcnow()
-        _scheduler_state["last_new_articles"] = new_articles
-        # Обновляем next_run_at из scheduler
-        job = _scheduler.get_job("rss_collect")
-        _scheduler_state["next_run_at"] = job.next_run_time if job else None
-        logger.info("Scheduler: сбор завершён, новых статей: %d", new_articles)
-        _start_extraction_worker()
+        resp = httpx.request(method, url, timeout=_WORKER_TIMEOUT, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        logger.exception("Scheduler: ошибка сбора RSS: %s", e)
-    finally:
-        _scheduler_state["is_running"] = False
-        _collect_lock.release()
+        logger.debug("Worker недоступен (%s): %s", url, e)
+        return {"error": "unavailable"}
 
 
-def _run_extraction_worker(full_scan: bool = False):
-    """Тело воркера — запускается в отдельном потоке."""
-    if not _extraction_lock.acquire(blocking=False):
-        logger.info("Extraction worker: уже запущен, пропускаем.")
-        return
+async def _call_worker_async(client: httpx.AsyncClient, url: str, method: str = "GET", **kwargs) -> dict:
+    """Асинхронный вызов воркера — для параллельных запросов."""
     try:
-        _extraction_state["running"] = True
-        from src.tools.db_state import get_connection
-        from src.pipeline.text_extraction_worker import extract_pending_articles, get_pending_count
-        conn = get_connection()
-        _extraction_state["pending"] = get_pending_count(conn)
-        logger.info("Extraction worker: начинаем, ожидают %d статей.", _extraction_state["pending"])
-        result = extract_pending_articles(conn, full_scan=full_scan)
-        _extraction_state["last_result"] = result
-        _extraction_state["pending"] = get_pending_count(conn)
-        logger.info("Extraction worker: завершён. %s", result)
-        _start_rag_indexer()
+        resp = await client.request(method, url, timeout=_WORKER_TIMEOUT, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        logger.exception("Extraction worker: ошибка: %s", e)
-    finally:
-        _extraction_state["running"] = False
-        _extraction_lock.release()
-
-
-def _start_extraction_worker(full_scan: bool = False):
-    """Запускает воркер извлечения текстов в фоновом потоке."""
-    t = threading.Thread(target=_run_extraction_worker, kwargs={"full_scan": full_scan}, daemon=True, name="extraction-worker")
-    t.start()
-
-
-def _run_rag_indexer():
-    """Тело RAG-индексатора — запускается в отдельном потоке после text_extraction_worker.
-    Крутится в цикле пока есть что индексировать — batch_size=50 ограничивает память,
-    но не число итераций. HTTP-запросов нет, rate limiting не нужен.
-    Поддерживает паузу через _indexer_run_event: wait() блокирует поток до resume."""
-    if not _indexer_lock.acquire(blocking=False):
-        logger.info("RAG indexer: уже запущен, пропускаем.")
-        return
-    try:
-        _indexer_state["running"] = True
-        from src.tools.db_state import get_connection
-        from src.pipeline.rag_indexer import index_pending_articles
-        conn = get_connection()
-        total_indexed = 0
-        total_chunks = 0
-        while True:
-            _indexer_run_event.wait()  # блокируется если установлена пауза
-            result = index_pending_articles(conn)
-            total_indexed += result["indexed"]
-            total_chunks += result["chunks_created"]
-            if result["indexed"] == 0:
-                break
-        _indexer_state["last_result"] = {"indexed": total_indexed, "chunks_created": total_chunks}
-        logger.info("RAG indexer: завершён. indexed=%d chunks=%d", total_indexed, total_chunks)
-    except Exception as e:
-        logger.exception("RAG indexer: ошибка: %s", e)
-    finally:
-        _indexer_state["running"] = False
-        _indexer_state["paused"] = False
-        _indexer_run_event.set()  # сбрасываем паузу чтобы следующий запуск стартовал чисто
-        _indexer_lock.release()
-
-
-def _start_rag_indexer():
-    """Запускает RAG-индексатор в фоновом потоке."""
-    t = threading.Thread(target=_run_rag_indexer, daemon=True, name="rag-indexer")
-    t.start()
+        logger.debug("Worker недоступен (%s): %s", url, e)
+        return {"error": "unavailable"}
 
 
 @asynccontextmanager
@@ -221,23 +121,7 @@ async def lifespan(app: FastAPI):
     refresh_catalog_stats(conn)
     logger.info("Статистика каталога обновлена.")
 
-    # Запускаем scheduler
-    _scheduler.add_job(
-        _run_scheduled_collect,
-        "interval",
-        hours=COLLECT_INTERVAL_HOURS,
-        id="rss_collect",
-        replace_existing=True,
-    )
-    _scheduler.start()
-    job = _scheduler.get_job("rss_collect")
-    _scheduler_state["next_run_at"] = job.next_run_time if job else None
-    logger.info("Scheduler запущен. Следующий сбор: %s", _scheduler_state["next_run_at"])
-
     yield
-
-    _scheduler.shutdown(wait=False)
-    logger.info("Scheduler остановлен.")
 
 
 _TAGS_METADATA = [
@@ -337,10 +221,14 @@ def health():
 )
 def auth_register(body: AuthRegister):
     from src.tools.db_state import get_connection, create_user
+    from config.config import ALLOWED_EMAILS
+    email = body.email.strip().lower()
+    if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail="Регистрация закрыта")
     conn = get_connection()
     if conn is None:
         raise HTTPException(status_code=503, detail="БД недоступна")
-    user = create_user(conn, email=body.email.strip().lower(), password_hash=hash_password(body.password))
+    user = create_user(conn, email=email, password_hash=hash_password(body.password))
     if user is None:
         raise HTTPException(status_code=400, detail="Пользователь с таким email уже существует")
     return AuthResponse(access_token=create_access_token(user["id"]))
@@ -465,24 +353,43 @@ def list_collection_articles(collection_id: int, current_user: dict = Depends(ge
     tags=["RSS"],
     summary="Статус автообновления лент",
 )
-def rss_status(current_user: dict = Depends(get_current_user)):
-    """Возвращает когда последний раз запускался сбор и когда следующий."""
+async def rss_status(current_user: dict = Depends(get_current_user)):
+    """Возвращает состояние всех воркеров и статистику индексации.
+    Три вызова к воркерам выполняются параллельно — общий таймаут 1 сек."""
+    import asyncio
     from src.tools.db_state import get_connection, get_rag_stats
     from src.pipeline.text_extraction_worker import get_pending_count
-    last = _scheduler_state["last_run_at"]
-    nxt = _scheduler_state["next_run_at"]
+
     conn = get_connection()
-    rag = get_rag_stats(conn, user_id=current_user["id"])
+
+    # БД и воркеры опрашиваем параллельно
+    async with httpx.AsyncClient() as client:
+        rag_task = asyncio.get_event_loop().run_in_executor(
+            None, lambda: get_rag_stats(conn, user_id=current_user["id"])
+        )
+        pending_task = asyncio.get_event_loop().run_in_executor(
+            None, lambda: get_pending_count(conn, user_id=current_user["id"])
+        )
+        collector, extraction, rag_worker, rag, pending = await asyncio.gather(
+            _call_worker_async(client, f"{WORKER_COLLECTOR_URL}/status"),
+            _call_worker_async(client, f"{WORKER_EXTRACTION_URL}/status"),
+            _call_worker_async(client, f"{WORKER_RAG_URL}/status"),
+            rag_task,
+            pending_task,
+        )
+
     return {
-        "last_run_at": last.isoformat() + "Z" if last else None,
-        "next_run_at": nxt.isoformat() if nxt else None,
-        "is_running": _scheduler_state["is_running"],
-        "last_new_articles": _scheduler_state["last_new_articles"],
-        "interval_hours": COLLECT_INTERVAL_HOURS,
-        "text_extraction_running": _extraction_state["running"],
-        "text_extraction_pending": get_pending_count(conn, user_id=current_user["id"]),
-        "rag_indexing": _indexer_state["running"],
-        "rag_paused": _indexer_state["paused"],
+        # Collect worker
+        "is_running": collector.get("running", False),
+        "last_run_at": collector.get("last_run_at"),
+        "last_new_articles": collector.get("last_new_articles"),
+        "collector_error": collector.get("error"),
+        # Extraction worker
+        "text_extraction_running": extraction.get("running", False),
+        "text_extraction_pending": pending,
+        # RAG worker (живые данные из БД, не из памяти воркера)
+        "rag_indexing": rag_worker.get("running", False),
+        "rag_paused": rag_worker.get("paused", False),
         "rag_indexed": rag["indexed"],
         "rag_pending": rag["pending"],
     }
@@ -497,54 +404,27 @@ def rss_status(current_user: dict = Depends(get_current_user)):
 )
 def rss_collect_endpoint(body: RssCollectRequest, current_user: dict = Depends(get_current_user)):
     """
-    Обходит все настроенные RSS-ленты и сохраняет **только новые** статьи в `processed_articles`.
+    Запускает сбор RSS досрочно через collect worker.
 
-    - Использует `last_processed_published_at` — не пересохраняет уже известные статьи.
-    - Не выполняет фильтрацию, эмбеддинги или суммаризацию — только сбор сырых данных.
-    - Ручной вызов сбрасывает таймер scheduler'а — следующий автозапуск через час от сейчас.
+    - Делегирует выполнение worker-collector — тот собирает и уведомляет extraction worker.
+    - Возвращает немедленно: {"started": true} или {"started": false} если уже запущен.
     """
-    if _scheduler_state["is_running"]:
+    result = _call_worker(f"{WORKER_COLLECTOR_URL}/run", method="POST")
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="Collect worker недоступен.")
+    if not result.get("started"):
         raise HTTPException(status_code=409, detail="Сбор уже выполняется.")
-    try:
-        from src.main import collect_rss
-        _scheduler_state["is_running"] = True
-        stats = collect_rss(
-            hours_back=body.hours_back,
-            limit_per_feed=body.limit_per_feed,
-        )
-        new_articles = stats.get("unique_articles", 0)
-        from src.tools.db_state import get_connection, refresh_catalog_stats
-        refresh_catalog_stats(get_connection())
-
-        # Обновляем состояние и сбрасываем таймер scheduler'а
-        _scheduler_state["last_run_at"] = datetime.utcnow()
-        _scheduler_state["last_new_articles"] = new_articles
-        _scheduler.reschedule_job(
-            "rss_collect", trigger="interval", hours=COLLECT_INTERVAL_HOURS
-        )
-        job = _scheduler.get_job("rss_collect")
-        _scheduler_state["next_run_at"] = job.next_run_time if job else None
-
-        _start_extraction_worker()
-
-        return RssCollectResponse(
-            success=True,
-            new_articles=new_articles,
-            total_parsed=stats.get("total_parsed", 0),
-            duplicates_skipped=stats.get("duplicates_skipped", 0),
-            already_processed_skipped=stats.get("already_processed_skipped", 0),
-            feeds_processed=stats.get("feeds_processed", 0),
-            feeds_failed=stats.get("feeds_failed", 0),
-            time_elapsed_sec=round(stats.get("time_elapsed_sec", 0.0), 2),
-            message=f"Сбор завершён. Новых статей: {new_articles}.",
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("RSS collect error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        _scheduler_state["is_running"] = False
+    return RssCollectResponse(
+        success=True,
+        new_articles=0,
+        total_parsed=0,
+        duplicates_skipped=0,
+        already_processed_skipped=0,
+        feeds_processed=0,
+        feeds_failed=0,
+        time_elapsed_sec=0.0,
+        message="Сбор запущен. Результат будет доступен через GET /api/rss/status.",
+    )
 
 
 class ExtractRequest(BaseModel):
@@ -557,28 +437,17 @@ class ExtractRequest(BaseModel):
     summary="Запустить фоновое извлечение текстов вручную",
 )
 def rss_extract_endpoint(body: ExtractRequest = ExtractRequest(), current_user: dict = Depends(get_current_user)):
-    """Запускает воркер извлечения full_text + BART-суммаризации без RSS-сбора.
+    """Запускает extraction worker через внутреннее API.
     full_scan=true — обрабатывает все статьи без лимита (для первоначального заполнения).
     """
-    if _extraction_state["running"]:
-        return {
-            "started": False,
-            "message": "Воркер уже запущен.",
-            "pending": _extraction_state["pending"],
-        }
-    from src.tools.db_state import get_connection
-    from src.pipeline.text_extraction_worker import get_pending_count
-    conn = get_connection()
-    pending = get_pending_count(conn)
-    _extraction_state["pending"] = pending
-    _start_extraction_worker(full_scan=body.full_scan)
-    mode = "полное сканирование" if body.full_scan else "пакетный режим"
-    return {
-        "started": True,
-        "message": f"Воркер запущен ({mode}). Статей в очереди: {pending}.",
-        "pending": pending,
-        "full_scan": body.full_scan,
-    }
+    result = _call_worker(
+        f"{WORKER_EXTRACTION_URL}/run",
+        method="POST",
+        json={"full_scan": body.full_scan},
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="Extraction worker недоступен.")
+    return result
 
 
 @app.post(
@@ -587,19 +456,11 @@ def rss_extract_endpoint(body: ExtractRequest = ExtractRequest(), current_user: 
     summary="Запустить RAG-индексацию вручную",
 )
 def rss_index_endpoint(current_user: dict = Depends(get_current_user)):
-    """Запускает фоновую RAG-индексацию без RSS-сбора и извлечения текстов.
-    Полезно для первоначального заполнения rag_documents после text_extraction_worker."""
-    if _indexer_state["running"]:
-        return {"started": False, "message": "RAG-индексатор уже запущен."}
-    from src.tools.db_state import get_connection, get_rag_stats
-    conn = get_connection()
-    rag = get_rag_stats(conn, user_id=current_user["id"])
-    _start_rag_indexer()
-    return {
-        "started": True,
-        "message": f"RAG-индексатор запущен. Статей в очереди: {rag['pending']}.",
-        "pending": rag["pending"],
-    }
+    """Запускает RAG-индексацию через внутреннее API rag worker."""
+    result = _call_worker(f"{WORKER_RAG_URL}/run", method="POST")
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="RAG worker недоступен.")
+    return result
 
 
 @app.post(
@@ -609,9 +470,10 @@ def rss_index_endpoint(current_user: dict = Depends(get_current_user)):
 )
 def rss_index_pause(current_user: dict = Depends(get_current_user)):
     """Приостанавливает RAG-индексатор между батчами. Текущий батч завершается."""
-    _indexer_run_event.clear()
-    _indexer_state["paused"] = True
-    return {"paused": True}
+    result = _call_worker(f"{WORKER_RAG_URL}/pause", method="POST")
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="RAG worker недоступен.")
+    return result
 
 
 @app.post(
@@ -621,9 +483,10 @@ def rss_index_pause(current_user: dict = Depends(get_current_user)):
 )
 def rss_index_resume(current_user: dict = Depends(get_current_user)):
     """Снимает паузу RAG-индексатора."""
-    _indexer_run_event.set()
-    _indexer_state["paused"] = False
-    return {"paused": False}
+    result = _call_worker(f"{WORKER_RAG_URL}/resume", method="POST")
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail="RAG worker недоступен.")
+    return result
 
 
 @app.post(
@@ -1293,6 +1156,7 @@ def generate_catalog_descriptions(current_user: dict = Depends(get_current_user)
     и сохраняет сгенерированные описания на русском языке.
     """
     import feedparser
+    import socket
     from src.tools.db_state import get_connection, update_feed_descriptions
     from src.tools.llm_utils import generate_feed_descriptions_batch
 
@@ -1310,7 +1174,12 @@ def generate_catalog_descriptions(current_user: dict = Depends(get_current_user)
     feeds_with_titles = []
     for feed in feeds_without_desc:
         try:
-            parsed = feedparser.parse(feed["url"])
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(15)
+            try:
+                parsed = feedparser.parse(feed["url"])
+            finally:
+                socket.setdefaulttimeout(old_timeout)
             titles = [e.get("title", "") for e in parsed.entries[:10] if e.get("title")]
             if titles:
                 feeds_with_titles.append({**feed, "titles": titles})

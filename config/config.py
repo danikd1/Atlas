@@ -372,7 +372,7 @@ DEFAULT_TEXT_EXTRACTION_SLEEP = 2.0  # Задержка между попытк�
 DEFAULT_TEXT_MIN_LENGTH = 300  # Минимальная длина текста для успешного извлечения
 
 # GigaChat: конфигурация
-GIGACHAT_CREDENTIALS = "MDE5ZGFmZTYtNDlhOS03NGNmLWIzOWUtZTZiYWUzZWVlMWZkOmJlNmVlMzIxLTFiZjItNGQ5NS04ZDVlLTdlYzQ0MWFlZGEzNA=="
+GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
 GIGACHAT_MODEL = "GigaChat"  # Модель GigaChat
 GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
 
@@ -382,12 +382,12 @@ GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
 GIGACHAT_SUMMARIZATION_ENABLED: bool = (
     os.environ.get("GIGACHAT_SUMMARIZATION_ENABLED", "true").strip().lower() != "false"
 )
-GIGACHAT_SUMMARIZATION_ENABLED = True
 
 # BART fallback: модель для суммаризации когда GigaChat недоступен.
-# facebook/bart-large-cnn  — английский, ~1.6 GB, высокое качество (по умолчанию)
-# IlyaGusev/mbart_ru_sum_gazeta — русский, ~900 MB (раскомментируй для RU-статей)
-BART_SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
+# sshleifer/distilbart-cnn-6-6 — английский, ~400 MB, ~90% качества bart-large-cnn, в 2 раза быстрее
+# facebook/bart-large-cnn      — английский, ~1.6 GB, высокое качество
+# IlyaGusev/mbart_ru_sum_gazeta — русский, ~900 MB (используется автоматически для RU-статей)
+BART_SUMMARIZATION_MODEL = "sshleifer/distilbart-cnn-6-6"
 BART_SUMMARY_MAX_LENGTH = 130   # токенов в резюме
 BART_SUMMARY_MIN_LENGTH = 40    # токенов минимум
 
@@ -403,12 +403,12 @@ DEFAULT_LLM_SLEEP = 1.5  # Задержка между запросами к LLM
 POSTGRES_ENABLED = True  # Можно отключить БД, если она недоступна
 
 # Базовые параметры подключения (заполни под свою локальную БД)
-POSTGRES_HOST = "localhost"
-POSTGRES_PORT = 5432
-POSTGRES_DB = "postgres"
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
+POSTGRES_DB = os.environ.get("POSTGRES_DB", "postgres")
 # По умолчанию — текущий пользователь macOS/Linux (как у Homebrew Postgres). Переопределение: POSTGRES_USER=...
 POSTGRES_USER = os.environ.get("POSTGRES_USER") or getpass.getuser()
-POSTGRES_PASSWORD = ""
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
 
 # Имена таблиц для состояния краулера и RAG-коллекций
 POSTGRES_TABLE_PROCESSED_ARTICLES = "processed_articles"
@@ -441,4 +441,13 @@ JWT_EXPIRE_DAYS = 7
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000"
 ).split(",")
+
+# Ограничение регистрации: список разрешённых email через запятую.
+# Если пустая строка — регистрация открыта (локальная разработка).
+# Пример: ALLOWED_EMAILS=user1@example.com,user2@example.com
+_raw = os.environ.get("ALLOWED_EMAILS", "").strip()
+ALLOWED_EMAILS: set[str] = (
+    {e.strip().lower() for e in _raw.split(",") if e.strip()}
+    if _raw else set()
+)
 

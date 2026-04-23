@@ -1,0 +1,99 @@
+services:
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: postgres
+      # Локально POSTGRES_PASSWORD пустой → используется дефолт atlas_local_dev
+      # На сервере берётся из .env (реальный пароль)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      retries: 5
+
+  api:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    ports:
+      - "8000:8000"
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+      WORKER_COLLECTOR_URL: http://worker-collector:8001
+      WORKER_EXTRACTION_URL: http://worker-extraction:8002
+      WORKER_RAG_URL: http://worker-rag:8003
+
+  worker-collector:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    command: uvicorn src.workers.collect_worker:app --host 0.0.0.0 --port 8001
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+      WORKER_EXTRACTION_URL: http://worker-extraction:8002
+
+  worker-extraction:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    command: uvicorn src.workers.extraction_worker:app --host 0.0.0.0 --port 8002
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+      WORKER_RAG_URL: http://worker-rag:8003
+
+  worker-rag:
+    build: .
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    command: uvicorn src.workers.rag_worker:app --host 0.0.0.0 --port 8003
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+    volumes:
+      # ML-модели кэшируются — не скачиваются повторно при пересборке образа
+      - hf-cache:/app/.cache/huggingface
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./RSS Reader/dist:/usr/share/nginx/html:ro
+      - certbot-data:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+
+volumes:
+  pgdata:
+  certbot-data:
+  certbot-webroot:
+  hf-cache:

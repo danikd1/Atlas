@@ -53,7 +53,7 @@ def index_pending_articles(conn, batch_size: int = 50) -> dict:
     if not articles:
         return {"indexed": 0, "chunks_created": 0, "failed": 0}
 
-    print(f"\n[rag-indexer] Индексируем {len(articles)} статей в коллекцию #{collection_id}...", flush=True)
+    print(f"\n[rag-indexer] Индексируем {len(articles)} статей...", flush=True)
 
     model = get_embedding_model()
     tokenizer = getattr(model, "tokenizer", None)
@@ -178,11 +178,11 @@ def index_pending_articles(conn, batch_size: int = 50) -> dict:
         mark_articles_rag_indexed(conn, article_ids_ok)
 
     print(
-        f"[rag-indexer] Готово: проиндексировано={indexed}  чанков={chunks_created}  ошибок={failed}",
+        f"[rag-indexer] Готово: Проиндексировано статей: {indexed} | Чанков создано: {chunks_created} | Ошибок: {failed}",
         flush=True,
     )
     logger.info(
-        "RAG indexer done: indexed=%d chunks=%d failed=%d",
+        "RAG worker: завершён. Проиндексировано: %d | Чанков: %d | Ошибок: %d",
         indexed, chunks_created, failed,
     )
     return {"indexed": indexed, "chunks_created": chunks_created, "failed": failed}
