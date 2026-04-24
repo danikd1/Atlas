@@ -81,8 +81,8 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
 
     result = bart(
         combined,
-        max_length=BART_SUMMARY_MAX_LENGTH,
-        min_length=BART_SUMMARY_MIN_LENGTH,
+        max_new_tokens=BART_SUMMARY_MAX_LENGTH,
+        min_new_tokens=BART_SUMMARY_MIN_LENGTH,
         do_sample=False,
     )
     return result[0]["summary_text"].strip()

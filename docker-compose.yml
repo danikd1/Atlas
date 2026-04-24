@@ -9,6 +9,9 @@ services:
       # Локально POSTGRES_PASSWORD пустой → используется дефолт atlas_local_dev
       # На сервере берётся из .env (реальный пароль)
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
+    ports:
+      # Только на localhost — снаружи не видно, но SSH-туннель работает
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -27,6 +30,7 @@ services:
       - "8000:8000"
     command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
     environment:
+      TZ: Europe/Moscow
       POSTGRES_HOST: db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
@@ -43,6 +47,7 @@ services:
     env_file: .env
     command: uvicorn src.workers.collect_worker:app --host 0.0.0.0 --port 8001
     environment:
+      TZ: Europe/Moscow
       POSTGRES_HOST: db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
@@ -57,6 +62,7 @@ services:
     env_file: .env
     command: uvicorn src.workers.extraction_worker:app --host 0.0.0.0 --port 8002
     environment:
+      TZ: Europe/Moscow
       POSTGRES_HOST: db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
@@ -73,6 +79,7 @@ services:
     env_file: .env
     command: uvicorn src.workers.rag_worker:app --host 0.0.0.0 --port 8003
     environment:
+      TZ: Europe/Moscow
       POSTGRES_HOST: db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}
@@ -90,7 +97,7 @@ services:
       - "443:443"
     volumes:
       - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
-      - ./RSS Reader/dist:/usr/share/nginx/html:ro
+      - ./frontend_dist:/usr/share/nginx/html:ro
       - certbot-data:/etc/letsencrypt
       - certbot-webroot:/var/www/certbot
 

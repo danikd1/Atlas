@@ -22,24 +22,32 @@ from ..tools.llm_utils import clean_text_for_llm
 
 logger = logging.getLogger(__name__)
 
+# Синглтон: модель загружается один раз и кешируется в памяти
+_embedding_model_cache: dict = {}
+
 
 def get_embedding_model(model_name: str = EMBEDDING_MODEL_NAME) -> SentenceTransformer:
     """
-    Создает экземпляр модели для эмбеддингов.
-    
+    Возвращает экземпляр модели для эмбеддингов.
+    При первом вызове загружает модель и кеширует её — повторные вызовы возвращают
+    тот же объект без повторной загрузки.
+
     Args:
         model_name: Название модели для загрузки
-        
+
     Returns:
         Экземпляр SentenceTransformer
-        
+
     Raises:
         RuntimeError: Если не удалось загрузить модель
     """
+    if model_name in _embedding_model_cache:
+        return _embedding_model_cache[model_name]
     try:
         logger.info(f"Загрузка модели эмбеддингов: {model_name}")
         model = SentenceTransformer(model_name)
         logger.info("✅ Модель загружена")
+        _embedding_model_cache[model_name] = model
         return model
     except Exception as e:
         error_msg = f"Ошибка загрузки модели эмбеддингов '{model_name}': {e}"

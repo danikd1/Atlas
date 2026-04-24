@@ -58,8 +58,8 @@ def _summarize_with_bart_auto(title: str, full_text: str) -> str:
 
     result = pipe(
         combined,
-        max_length=BART_SUMMARY_MAX_LENGTH,
-        min_length=BART_SUMMARY_MIN_LENGTH,
+        max_new_tokens=BART_SUMMARY_MAX_LENGTH,
+        min_new_tokens=BART_SUMMARY_MIN_LENGTH,
         do_sample=False,
     )
     return result[0]["summary_text"].strip()

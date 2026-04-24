@@ -122,9 +122,9 @@ export function SourceFeedsPage() {
     try {
       const folderName = `${domain} · ${category}`;
       const folder = await api.createFolder(folderName, toSubscribe[0].favicon_url);
-      await Promise.all(toSubscribe.map((f) =>
-        api.addFeed({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category, folder_id: folder.id })
-      ));
+      await api.addFeedsBatch(
+        toSubscribe.map((f) => ({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category, folder_id: folder.id }))
+      );
       const ids = new Set(toSubscribe.map((f) => f.id));
       setFeeds((prev) => prev.map((f) => ids.has(f.id) ? { ...f, is_subscribed: true } : f));
       window.dispatchEvent(new CustomEvent("feeds-updated"));

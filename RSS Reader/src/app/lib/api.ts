@@ -172,6 +172,24 @@ export const api = {
     return res.json();
   },
 
+  async addFeedsBatch(feeds: {
+    url: string;
+    name: string;
+    favicon_url?: string | null;
+    description?: string | null;
+    category?: string | null;
+    folder_id?: number | null;
+  }[]): Promise<ApiFeed[]> {
+    const res = await fetch(`${API_BASE}/api/feeds/batch`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ feeds }),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Не удалось добавить ленты");
+    return res.json();
+  },
+
   async deleteFeed(id: number): Promise<void> {
     const res = await fetch(`${API_BASE}/api/feeds/${id}`, { method: "DELETE", headers: authHeaders() });
     handleUnauthorized(res);

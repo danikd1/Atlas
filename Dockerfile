@@ -20,6 +20,7 @@ COPY . .
 # ML-модели кэшируются здесь — пробрасывается как volume в docker-compose.yml
 # чтобы не скачивать заново при каждом пересборке образа
 ENV HF_HOME=/app/.cache/huggingface
+ENV PYTHONUNBUFFERED=1
 
 # Дефолтная команда — API. Воркеры переопределяют через command: в docker-compose.yml
 CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]

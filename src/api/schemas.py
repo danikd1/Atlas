@@ -277,6 +277,11 @@ class FeedCreate(BaseModel):
     folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели (опционально).")
 
 
+class FeedBatchCreate(BaseModel):
+    """Данные для массовой подписки на ленты."""
+    feeds: list[FeedCreate] = Field(..., description="Список лент для подписки.")
+
+
 class FeedItem(BaseModel):
     """Лента пользователя — данные для отображения в боковой панели."""
     id: int = Field(description="Уникальный ID ленты.")

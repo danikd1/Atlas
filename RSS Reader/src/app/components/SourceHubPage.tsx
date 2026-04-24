@@ -99,10 +99,8 @@ export function SourceHubPage() {
     if (toSubscribe.length === 0) return;
     setSubmittingCats((prev) => new Set(prev).add(category));
     try {
-      await Promise.all(
-        toSubscribe.map((f) =>
-          api.addFeed({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category })
-        )
+      await api.addFeedsBatch(
+        toSubscribe.map((f) => ({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category }))
       );
       const ids = new Set(toSubscribe.map((f) => f.id));
       setFeeds((prev) => prev.map((f) => ids.has(f.id) ? { ...f, is_subscribed: true } : f));

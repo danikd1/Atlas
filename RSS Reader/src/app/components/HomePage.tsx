@@ -56,6 +56,7 @@ export function HomePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
+  const [submittingDomains, setSubmittingDomains] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadCatalog();
@@ -99,14 +100,14 @@ export function HomePage() {
     }
   };
 
-  const handleSubscribe = async (feeds: ApiCatalogFeed[], sourceName: string) => {
+  const handleSubscribe = async (feeds: ApiCatalogFeed[], sourceName: string, domain: string) => {
+    if (submittingDomains.has(domain)) return;
+    setSubmittingDomains((prev) => new Set(prev).add(domain));
     try {
       if (feeds.length > 1) {
         const folder = await api.createFolder(sourceName, feeds[0].favicon_url);
-        await Promise.all(
-          feeds.map((f) =>
-            api.addFeed({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category, folder_id: folder.id })
-          )
+        await api.addFeedsBatch(
+          feeds.map((f) => ({ url: f.url, name: f.name, favicon_url: f.favicon_url, description: f.description, category: f.category, folder_id: folder.id }))
         );
       } else {
         await api.addFeed({ url: feeds[0].url, name: feeds[0].name, favicon_url: feeds[0].favicon_url, description: feeds[0].description, category: feeds[0].category });
@@ -117,11 +118,15 @@ export function HomePage() {
       setTimeout(silentReloadCatalog, 1500);
     } catch (e) {
       console.error("Ошибка при подписке:", e);
+    } finally {
+      setSubmittingDomains((prev) => { const s = new Set(prev); s.delete(domain); return s; });
     }
   };
 
   const handleUnsubscribe = async (feed: ApiCatalogFeed) => {
     const domain = getDomain(feed.url);
+    if (submittingDomains.has(domain)) return;
+    setSubmittingDomains((prev) => new Set(prev).add(domain));
     const sameDomainSubscribed = catalog.filter((f) => getDomain(f.url) === domain && f.is_subscribed);
     try {
       const myFeeds = await api.getFeeds(true);
@@ -139,6 +144,8 @@ export function HomePage() {
       setTimeout(silentReloadCatalog, 1500);
     } catch (e) {
       console.error("Ошибка при отписке:", e);
+    } finally {
+      setSubmittingDomains((prev) => { const s = new Set(prev); s.delete(domain); return s; });
     }
   };
 
@@ -436,17 +443,21 @@ export function HomePage() {
                   {/* Action Buttons */}
                   <div className="flex items-center justify-between gap-2">
                     <button
+                      disabled={submittingDomains.has(domain)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        isSubscribed ? handleUnsubscribe(representative) : handleSubscribe(feeds, sourceName);
+                        isSubscribed ? handleUnsubscribe(representative) : handleSubscribe(feeds, sourceName, domain);
                       }}
-                      className={`text-sm px-4 py-1.5 rounded-md transition-colors ${
+                      className={`text-sm px-4 py-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                         isSubscribed
                           ? "bg-gray-100 text-gray-700 hover:bg-red-50 hover:text-red-600"
                           : "bg-blue-600 text-white hover:bg-blue-700"
                       }`}
                     >
-                      {isSubscribed ? "Отписаться" : "Подписаться"}
+                      {submittingDomains.has(domain)
+                        ? <Loader2 className="w-4 h-4 animate-spin inline" />
+                        : isSubscribed ? "Отписаться" : "Подписаться"
+                      }
                     </button>
                     {hasMultiple && (
                       <button

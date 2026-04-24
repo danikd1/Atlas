@@ -361,7 +361,10 @@ EMBED_RELEVANT_THRESHOLD = 0.35
 DEFAULT_EMBED_BATCH_SIZE = 32  # Размер батча для обработки эмбеддингов
 
 # Эмбеддинги: модель
-EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+# LaBSE — мультиязычная, 768d, 512 токенов (vs 128 у paraphrase-multilingual-mpnet-base-v2)
+EMBEDDING_MODEL_NAME = "sentence-transformers/LaBSE"
+# Старая модель (128 токенов — чанки обрезались, качество эмбеддингов снижено):
+# EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 
 # Rerank для QA: cross-encoder (можно заменить на мультиязычный аналог при необходимости)
 QA_RERANK_MODEL_NAME = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
@@ -423,7 +426,8 @@ POSTGRES_TABLE_INBOX_ARTICLES = "inbox_articles"
 EMBEDDING_DIM = 768
 
 # RAG-чанкирование: размер чанка и перекрытие (в токенах)
-RAG_CHUNK_MAX_TOKENS = 128
+# LaBSE поддерживает 256 токенов (vs 128 у paraphrase-multilingual-mpnet-base-v2)
+RAG_CHUNK_MAX_TOKENS = 256
 RAG_CHUNK_OVERLAP_TOKENS = 50
 
 # Дайджест (4 раздела без графа): кластеризация + LLM-описание/классификация

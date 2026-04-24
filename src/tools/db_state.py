@@ -2222,6 +2222,7 @@ def get_articles_for_bertopic_collection(
                 pa.link,
                 pa.title,
                 pa.summary,
+                pa.ai_summary,
                 pa.source,
                 pa.published_at,
                 pa.feed_id,

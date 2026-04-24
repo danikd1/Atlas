@@ -56,7 +56,17 @@ def index_pending_articles(conn, batch_size: int = 50) -> dict:
     print(f"\n[rag-indexer] Индексируем {len(articles)} статей...", flush=True)
 
     model = get_embedding_model()
-    tokenizer = getattr(model, "tokenizer", None)
+    # Получаем токенайзер из модели — пробуем несколько способов для разных версий sentence_transformers
+    tokenizer = None
+    try:
+        tokenizer = model.tokenizer  # sentence_transformers >= 3.x
+    except AttributeError:
+        pass
+    if tokenizer is None:
+        try:
+            tokenizer = model[0].tokenizer  # sentence_transformers < 3.x
+        except Exception:
+            pass
     if tokenizer is None:
         try:
             from transformers import AutoTokenizer

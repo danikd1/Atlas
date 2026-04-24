@@ -38,6 +38,7 @@ from .schemas import (
     CatalogFeedItem,
     CollectionArticle,
     CollectionItem,
+    FeedBatchCreate,
     FeedCreate,
     FeedItem,
     FeedUpdate,
@@ -947,6 +948,41 @@ def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: 
 
     background_tasks.add_task(_collect_new_feed)
     return FeedItem(**full_feed)
+
+
+@app.post(
+    "/api/feeds/batch",
+    tags=["Ленты"],
+    summary="Массовая подписка на ленты",
+    response_model=list[FeedItem],
+    status_code=201,
+)
+def add_feeds_batch(body: FeedBatchCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
+    """Подписывает пользователя на несколько лент за один запрос. Эффективнее чем N отдельных вызовов /api/feeds."""
+    from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds, refresh_catalog_stats
+    conn = get_connection()
+    ensure_tables(conn)
+
+    results = []
+    for feed_data in body.feeds:
+        feed = create_feed(
+            conn,
+            url=feed_data.url,
+            name=feed_data.name,
+            favicon_url=feed_data.favicon_url,
+            description=feed_data.description,
+            category=feed_data.category,
+            folder_id=feed_data.folder_id,
+            user_id=current_user["id"],
+        )
+        if feed:
+            results.append(feed)
+
+    feeds = list_feeds(conn, user_id=current_user["id"])
+    feeds_by_id = {f["id"]: f for f in feeds}
+    background_tasks.add_task(refresh_catalog_stats, conn)
+
+    return [FeedItem(**feeds_by_id.get(f["id"], f)) for f in results]
 
 
 @app.get(
