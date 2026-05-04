@@ -38,6 +38,8 @@ services:
       WORKER_COLLECTOR_URL: http://worker-collector:8001
       WORKER_EXTRACTION_URL: http://worker-extraction:8002
       WORKER_RAG_URL: http://worker-rag:8003
+    volumes:
+      - hf-cache:/app/.cache/huggingface
 
   worker-collector:
     build: .
@@ -97,7 +99,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./frontend_dist:/usr/share/nginx/html:ro
       - certbot-data:/etc/letsencrypt
       - certbot-webroot:/var/www/certbot

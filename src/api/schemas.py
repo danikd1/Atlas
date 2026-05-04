@@ -13,7 +13,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 class AuthRegister(BaseModel):
     email: EmailStr = Field(..., description="Email пользователя")
-    password: str = Field(..., min_length=6, description="Пароль (мин. 6 символов)")
+    password: str = Field(..., min_length=8, description="Пароль (мин. 8 символов)")
 
 
 class AuthLogin(BaseModel):
@@ -34,7 +34,7 @@ class UserInfo(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1)
-    new_password: str = Field(..., min_length=6)
+    new_password: str = Field(..., min_length=8)
 
 
 # ─── Router ──────���─────────────────────────────────────────────────────────

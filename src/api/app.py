@@ -3,8 +3,9 @@
 FastAPI-приложение системы Content Intelligence Platform.
 
 Запуск: uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
-Swagger UI: http://localhost:8000/docs
-ReDoc:       http://localhost:8000/redoc
+Swagger UI доступен только при ENVIRONMENT=development:
+  http://localhost:8000/docs
+  http://localhost:8000/redoc
 """
 from __future__ import annotations
 
@@ -17,13 +18,18 @@ from typing import Optional
 import httpx
 from pydantic import BaseModel
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.auth.auth import get_current_user, hash_password, verify_password, create_access_token
 from config.config import ALLOWED_ORIGINS
+
+limiter = Limiter(key_func=get_remote_address)
 
 from .schemas import (
     ArticleDetail,
@@ -158,6 +164,8 @@ _TAGS_METADATA = [
     },
 ]
 
+_is_dev = os.environ.get("ENVIRONMENT", "production") == "development"
+
 app = FastAPI(
     lifespan=lifespan,
     title="Content Intelligence Platform",
@@ -172,16 +180,19 @@ app = FastAPI(
     ),
     version="1.0.0",
     openapi_tags=_TAGS_METADATA,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
@@ -217,7 +228,8 @@ def health():
     summary="Регистрация нового пользователя",
     response_model=AuthResponse,
 )
-def auth_register(body: AuthRegister):
+@limiter.limit("5/minute")
+def auth_register(request: Request, body: AuthRegister):
     from src.tools.db_state import get_connection, create_user
     from config.config import ALLOWED_EMAILS
     email = body.email.strip().lower()
@@ -238,7 +250,8 @@ def auth_register(body: AuthRegister):
     summary="Вход в систему",
     response_model=AuthResponse,
 )
-def auth_login(body: AuthLogin):
+@limiter.limit("10/minute")
+def auth_login(request: Request, body: AuthLogin):
     from src.tools.db_state import get_connection, get_user_by_email
     conn = get_connection()
     if conn is None:
