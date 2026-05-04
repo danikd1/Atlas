@@ -2488,6 +2488,103 @@ def get_rag_chunk_count(conn, collection_id: int, feed_ids: list, user_id: int) 
     return int(row["cnt"]) if row else 0
 
 
+def get_rag_pending_for_collection(conn, collection_id: int) -> int:
+    """Число статей BERTopic-темы которые можно проиндексировать, но ещё не проиндексированы.
+    collection_id — id из таблицы collections (не topic_id).
+    0 означает 100% покрытие — RAG доступен для QA по этой теме."""
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
+            JOIN collections c ON c.id = %s
+            JOIN bertopic_assignments ba ON ba.link = pa.link
+                AND ba.topic_id = c.bertopic_topic_id
+                AND ba.owner_id = c.owner_id
+            WHERE (pa.full_text IS NOT NULL OR (pa.summary IS NOT NULL AND pa.summary != ''))
+              AND pa.rag_indexed_at IS NULL;
+            """,
+            (collection_id,),
+        )
+        row = cur.fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def get_rag_chunk_count_for_collection(conn, rag_collection_id: int, collection_id: int) -> int:
+    """Число RAG-чанков для статей BERTopic-темы.
+    collection_id — id из таблицы collections (не topic_id)."""
+    if conn is None:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+            JOIN collections c ON c.id = %s
+            JOIN bertopic_assignments ba ON ba.link = rd.link
+                AND ba.topic_id = c.bertopic_topic_id
+                AND ba.owner_id = c.owner_id
+            WHERE rd.collection_id = %s;
+            """,
+            (collection_id, rag_collection_id),
+        )
+        row = cur.fetchone()
+    return int(row["cnt"]) if row else 0
+
+
+def get_rag_coverage_for_collection(conn, rag_collection_id: int, collection_id: int) -> dict:
+    """Возвращает {total, indexed} — сколько статей коллекции с контентом и сколько реально в rag_documents.
+    Надёжнее чем get_rag_pending_for_collection: проверяет фактическое наличие чанков, а не rag_indexed_at."""
+    if conn is None:
+        return {"total": 0, "indexed": 0}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT pa.link) AS total,
+                COUNT(DISTINCT rd.link) AS indexed
+            FROM collections c
+            JOIN bertopic_assignments ba ON ba.topic_id = c.bertopic_topic_id AND ba.owner_id = c.owner_id
+            JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = ba.link
+            LEFT JOIN {POSTGRES_TABLE_RAG_DOCUMENTS} rd ON rd.link = pa.link AND rd.collection_id = %s
+            WHERE c.id = %s
+              AND (pa.full_text IS NOT NULL OR (pa.summary IS NOT NULL AND pa.summary != ''));
+            """,
+            (rag_collection_id, collection_id),
+        )
+        row = cur.fetchone()
+    if row:
+        return {"total": int(row["total"]), "indexed": int(row["indexed"])}
+    return {"total": 0, "indexed": 0}
+
+
+def get_rag_coverage_for_feeds(conn, rag_collection_id: int, feed_ids: list, user_id: int) -> dict:
+    """Возвращает {total, indexed} — сколько статей из указанных лент с контентом и сколько реально в rag_documents.
+    Надёжнее чем get_rag_pending_for_feeds: проверяет фактическое наличие чанков, а не rag_indexed_at."""
+    if conn is None or not feed_ids:
+        return {"total": 0, "indexed": 0}
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT pa.link) AS total,
+                COUNT(DISTINCT rd.link) AS indexed
+            FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
+            JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+            LEFT JOIN {POSTGRES_TABLE_RAG_DOCUMENTS} rd ON rd.link = pa.link AND rd.collection_id = %s
+            WHERE pa.feed_id = ANY(%s)
+              AND (pa.full_text IS NOT NULL OR (pa.summary IS NOT NULL AND pa.summary != ''));
+            """,
+            (user_id, rag_collection_id, feed_ids),
+        )
+        row = cur.fetchone()
+    if row:
+        return {"total": int(row["total"]), "indexed": int(row["indexed"])}
+    return {"total": 0, "indexed": 0}
+
+
 def get_rag_pending_for_feeds(conn, feed_ids: list, user_id: int) -> int:
     """Число статей в лентах пользователя которые можно проиндексировать, но ещё не проиндексированы.
     Индексируемые = есть full_text ИЛИ summary (summary — fallback для источников без full_text).

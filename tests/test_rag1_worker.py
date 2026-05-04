@@ -173,3 +173,50 @@ def test_extraction_exception_marks_error():
 
     mock_error.assert_called_once_with(conn, 4)
     assert result["failed"] == 1
+
+
+def test_domain_all_failed_marks_remaining_articles():
+    """Весь батч домена провалился → остальные статьи домена помечаются через mark_domain_fulltext_error."""
+    conn = MagicMock()
+    articles = [_make_article(5, "https://paywalled.com/article1")]
+
+    with patch("src.tools.db_state.get_articles_without_fulltext", return_value=articles), \
+         patch("src.tools.db_state.get_articles_without_summary", return_value=[]), \
+         patch("src.tools.db_state.mark_fulltext_error"), \
+         patch("src.tools.db_state.mark_domain_fulltext_error", return_value=3) as mock_domain_error, \
+         patch("src.tools.text_extraction.extract_full_text", return_value=None):
+
+        result = extract_pending_articles(conn, batch_size=10, domain_delay=0)
+
+    mock_domain_error.assert_called_once()
+    assert result["skipped"] == 3
+
+
+def test_extract_pending_returns_skipped_counter():
+    """Возвращает счётчик skipped в результате."""
+    conn = MagicMock()
+    articles = [_make_article(6, "https://jssite.com/article")]
+
+    with patch("src.tools.db_state.get_articles_without_fulltext", return_value=articles), \
+         patch("src.tools.db_state.get_articles_without_summary", return_value=[]), \
+         patch("src.tools.db_state.mark_fulltext_error"), \
+         patch("src.tools.db_state.mark_domain_fulltext_error", return_value=5), \
+         patch("src.tools.text_extraction.extract_full_text", return_value=None):
+
+        result = extract_pending_articles(conn, batch_size=10, domain_delay=0)
+
+    assert "skipped" in result
+    assert result["skipped"] == 5
+
+
+def test_get_pending_count_with_user_id():
+    """С user_id фильтрует только по лентам этого пользователя."""
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (7,)
+
+    result = get_pending_count(conn, user_id=42)
+
+    assert result == 7
+    # Проверяем что в SQL был передан user_id
+    call_args = conn.cursor.return_value.__enter__.return_value.execute.call_args
+    assert 42 in call_args[0][1]

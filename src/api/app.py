@@ -752,6 +752,58 @@ def bertopic_collection_articles(collection_id: int, current_user: dict = Depend
         conn.close()
 
 
+@app.get(
+    "/api/bertopic/collections/{collection_id}/rag-status",
+    tags=["BERTopic"],
+    summary="Статус RAG-индексации для BERTopic-коллекции",
+)
+def bertopic_collection_rag_status(collection_id: int, current_user: dict = Depends(get_current_user)):
+    """Возвращает {total, indexed, ready} — сколько статей коллекции проиндексировано в RAG."""
+    from src.tools.db_state import get_connection, get_collection_by_id, get_global_rag_collection, get_rag_coverage_for_collection
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Нет подключения к БД")
+    try:
+        collection = get_collection_by_id(conn, collection_id, owner_id=current_user["id"])
+        if not collection:
+            raise HTTPException(status_code=403, detail="Коллекция не найдена или не принадлежит пользователю")
+        rag_collection = get_global_rag_collection(conn)
+        if not rag_collection:
+            return {"total": 0, "indexed": 0, "ready": False}
+        coverage = get_rag_coverage_for_collection(conn, rag_collection["id"], collection_id)
+        total, indexed = coverage["total"], coverage["indexed"]
+        return {"total": total, "indexed": indexed, "ready": total > 0 and total == indexed}
+    finally:
+        conn.close()
+
+
+@app.get(
+    "/api/feeds/rag-status",
+    tags=["Q&A"],
+    summary="Статус RAG-индексации для указанных лент",
+)
+def feeds_rag_status(feed_ids: str, current_user: dict = Depends(get_current_user)):
+    """Возвращает {total, indexed, ready} — сколько статей из указанных лент проиндексировано в RAG.
+    feed_ids передаётся как строка через запятую: ?feed_ids=1,2,3"""
+    from src.tools.db_state import get_connection, get_global_rag_collection, get_rag_coverage_for_feeds
+    try:
+        ids = [int(x) for x in feed_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="feed_ids должны быть числами через запятую")
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Нет подключения к БД")
+    try:
+        rag_collection = get_global_rag_collection(conn)
+        if not rag_collection:
+            return {"total": 0, "indexed": 0, "ready": False}
+        coverage = get_rag_coverage_for_feeds(conn, rag_collection["id"], ids, current_user["id"])
+        total, indexed = coverage["total"], coverage["indexed"]
+        return {"total": total, "indexed": indexed, "ready": total > 0 and total == indexed}
+    finally:
+        conn.close()
+
+
 @app.post(
     "/api/feeds/qa",
     tags=["Q&A"],

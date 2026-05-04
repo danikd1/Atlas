@@ -56,15 +56,17 @@ _run_event = threading.Event()
 
 def _do_collect() -> None:
     from src.main import collect_rss
-    from src.tools.db_state import get_connection, refresh_catalog_stats
+    from src.tools.db_state import get_connection, get_feeds_as_dict, refresh_catalog_stats
 
     _state["running"] = True
     _state["error"] = None
     logger.info("Collect worker: начинаем сбор RSS...")
 
     try:
-        stats = collect_rss()
         conn = get_connection()
+        db_feeds = get_feeds_as_dict(conn)
+        logger.info("Collect worker: лент из БД: %d", len(db_feeds))
+        stats = collect_rss(rss_feeds=db_feeds if db_feeds else None)
         refresh_catalog_stats(conn)
 
         new_articles = stats.get("unique_articles", 0)

@@ -31,6 +31,7 @@ services:
     command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
     environment:
       TZ: Europe/Moscow
+      PYTHONUNBUFFERED: "1"
       POSTGRES_HOST: db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_local_dev}

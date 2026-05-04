@@ -225,6 +225,82 @@ def retrieve_chunks_by_feeds(
     return chunks
 
 
+def retrieve_chunks_by_collection(
+    conn,
+    query_embedding: Sequence[float],
+    rag_collection_id: int,
+    bertopic_collection_id: int,
+    top_k: int = 40,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[RetrievedChunk]:
+    """
+    Векторный поиск по чанкам глобальной RAG-коллекции с фильтром по BERTopic-коллекции.
+    Аналог retrieve_chunks_by_feeds, но изоляция через bertopic_assignments вместо user_feeds.
+    """
+    if conn is None or not POSTGRES_ENABLED or not query_embedding:
+        return []
+
+    emb_str = _embedding_to_vector_str(query_embedding)
+    conditions = ["rd.collection_id = %s"]
+    params: List[Any] = [rag_collection_id]
+
+    if date_from is not None:
+        conditions.append("rd.published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("rd.published_at <= %s")
+        params.append(date_to)
+
+    where_clause = " AND ".join(conditions)
+    params_for_query = [emb_str, bertopic_collection_id] + params + [emb_str, top_k]
+
+    sql = f"""
+        SELECT
+            rd.collection_id,
+            rd.link,
+            rd.chunk_index,
+            rd.title,
+            rd.summary,
+            rd.source,
+            rd.published_at,
+            rd.text_payload,
+            rd.embed_similarity_to_topic,
+            (rd.embedding <-> %s::vector) AS distance,
+            pa.id AS article_id
+        FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+        JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = rd.link
+        JOIN collections c ON c.id = %s
+        JOIN bertopic_assignments ba ON ba.link = rd.link
+            AND ba.topic_id = c.bertopic_topic_id
+            AND ba.owner_id = c.owner_id
+        WHERE {where_clause}
+        ORDER BY rd.embedding <-> %s::vector
+        LIMIT %s;
+    """
+
+    chunks: List[RetrievedChunk] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, params_for_query)
+        for row in cur.fetchall():
+            chunks.append(
+                RetrievedChunk(
+                    collection_id=row["collection_id"],
+                    link=row["link"],
+                    chunk_index=row["chunk_index"],
+                    title=row.get("title") or "",
+                    summary=row.get("summary") or "",
+                    source=row.get("source") or "",
+                    published_at=row.get("published_at"),
+                    text_payload=row.get("text_payload") or "",
+                    embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
+                    distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                    article_id=int(row["article_id"]) if row.get("article_id") else 0,
+                )
+            )
+    return chunks
+
+
 def print_retrieved_chunks(
     query: str,
     collection_id: int,

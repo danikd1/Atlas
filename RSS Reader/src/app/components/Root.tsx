@@ -118,6 +118,12 @@ export function Root() {
     return () => clearInterval(id);
   }, [fetchRagStatus, ragStatus?.rag_indexing, ragStatus?.text_extraction_running]);
 
+  // Обновляем RAG-статус сразу при подписке/отписке
+  useEffect(() => {
+    window.addEventListener("feeds-updated", fetchRagStatus);
+    return () => window.removeEventListener("feeds-updated", fetchRagStatus);
+  }, [fetchRagStatus]);
+
   const handleRagPauseResume = async () => {
     try {
       if (ragStatus?.rag_paused) {

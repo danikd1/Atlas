@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router";
-import { Send, Loader2, Clock, ChevronDown, ChevronRight, AlertTriangle, Play } from "lucide-react";
+import { Send, Loader2, Clock, ChevronDown, ChevronRight, AlertTriangle, Play, CheckCircle2 } from "lucide-react";
 import { api } from "../lib/api";
 import { qaCache, qaCacheKey, type QAHistoryItem, type QASource } from "../lib/qaCache";
 
@@ -146,11 +146,19 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
   const [extractionPending, setExtractionPending] = useState(0);
   const [startingIndexer, setStartingIndexer] = useState(false);
 
+  // Статус RAG для конкретной коллекции (только когда collectionId задан)
+  const [collectionRagTotal, setCollectionRagTotal] = useState<number | null>(null);
+  const [collectionRagIndexed, setCollectionRagIndexed] = useState<number | null>(null);
+  const [collectionRagReady, setCollectionRagReady] = useState<boolean | null>(null);
+
+  // Статус RAG для конкретных лент
+  const [feedsRagTotal, setFeedsRagTotal] = useState<number | null>(null);
+  const [feedsRagIndexed, setFeedsRagIndexed] = useState<number | null>(null);
+  const [feedsRagReady, setFeedsRagReady] = useState<boolean | null>(null);
+
   const feedKey = qaCacheKey(feedIds);
 
   const fetchRagStatus = useCallback(async () => {
-    // Skip RAG status check when BERTopic collection is active
-    if (collectionId != null) return;
     try {
       const s = await api.getRssStatus();
       setRagPending(s.rag_pending ?? 0);
@@ -159,7 +167,31 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
     } catch {
       // ignore
     }
+  }, []);
+
+  const fetchCollectionRagStatus = useCallback(async () => {
+    if (!collectionId) return;
+    try {
+      const s = await api.collectionRagStatus(collectionId);
+      setCollectionRagTotal(s.total);
+      setCollectionRagIndexed(s.indexed);
+      setCollectionRagReady(s.ready);
+    } catch {
+      // ignore
+    }
   }, [collectionId]);
+
+  const fetchFeedsRagStatus = useCallback(async () => {
+    if (collectionId || feedIds.length === 0) return;
+    try {
+      const s = await api.feedsRagStatus(feedIds);
+      setFeedsRagTotal(s.total);
+      setFeedsRagIndexed(s.indexed);
+      setFeedsRagReady(s.ready);
+    } catch {
+      // ignore
+    }
+  }, [collectionId, feedIds]);
 
   useEffect(() => {
     const h = qaCache.getHistory(feedKey);
@@ -175,6 +207,18 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
     return () => clearInterval(id);
   }, [fetchRagStatus]);
 
+  useEffect(() => {
+    fetchCollectionRagStatus();
+    const id = setInterval(fetchCollectionRagStatus, 15_000);
+    return () => clearInterval(id);
+  }, [fetchCollectionRagStatus]);
+
+  useEffect(() => {
+    fetchFeedsRagStatus();
+    const id = setInterval(fetchFeedsRagStatus, 15_000);
+    return () => clearInterval(id);
+  }, [fetchFeedsRagStatus]);
+
   const handleStartIndexer = async () => {
     setStartingIndexer(true);
     try {
@@ -183,7 +227,7 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
       } else {
         await api.startRagIndexer();
       }
-      await fetchRagStatus();
+      await Promise.all([fetchRagStatus(), fetchFeedsRagStatus(), fetchCollectionRagStatus()]);
     } catch {
       // ignore
     } finally {
@@ -231,18 +275,39 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
     }
   };
 
-  const ragUnavailable = collectionId == null && ragPending !== null && ragPending > 0;
-  const ragTotal = (ragIndexed ?? 0) + (ragPending ?? 0);
+  // Для коллекций — статус конкретной коллекции
+  // Для лент — статус конкретных лент
+  const ragUnavailable = collectionId != null
+    ? collectionRagReady === false && collectionRagTotal !== null && collectionRagTotal > 0
+    : feedsRagReady === false && feedsRagTotal !== null && feedsRagTotal > 0;
+
+  const ragReady = collectionId != null
+    ? collectionRagReady === true
+    : feedsRagReady === true;
+
+  const ragStatusLabel = collectionId != null
+    ? `${collectionRagIndexed ?? 0} / ${collectionRagTotal ?? 0}`
+    : `${feedsRagIndexed ?? 0} / ${feedsRagTotal ?? 0}`;
 
   return (
     <div className="border-t border-gray-100 bg-gray-50">
+      {/* RAG готов — баннер */}
+      {ragReady && !ragUnavailable && (
+        <div className="mx-3 mt-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2">
+          <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+          <span className="text-xs text-green-700">
+            База знаний готова для поиска по полным текстам
+          </span>
+        </div>
+      )}
+
       {/* RAG недоступен — баннер */}
       {ragUnavailable && (
         <div className="mx-3 mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
           <span className="text-xs text-amber-700 flex-1 min-w-0">
             База знаний не готова
-            {ragTotal > 0 && <span className="text-amber-500 ml-1">{ragIndexed} / {ragTotal}</span>}
+            <span className="text-amber-500 ml-1">{ragStatusLabel}</span>
           </span>
           <button
             onClick={handleStartIndexer}

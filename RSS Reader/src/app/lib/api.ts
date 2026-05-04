@@ -463,7 +463,12 @@ export const api = {
       body: JSON.stringify({ ...params, ...gigachatParams() }),
     });
     handleUnauthorized(res);
-    if (!res.ok) throw new Error("Ошибка QA");
+    if (!res.ok) {
+      if (res.status === 403) throw new Error("Вы не подписаны на эту ленту");
+      let detail = "Ошибка QA";
+      try { detail = (await res.json()).detail ?? detail; } catch {}
+      throw new Error(detail);
+    }
     return res.json();
   },
 
@@ -545,6 +550,28 @@ export const api = {
     return res.json();
   },
 
+  async feedsRagStatus(feedIds: number[]): Promise<{
+    total: number;
+    indexed: number;
+    ready: boolean;
+  }> {
+    const res = await fetch(`${API_BASE}/api/feeds/rag-status?feed_ids=${feedIds.join(",")}`, { headers: authHeaders() });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Ошибка загрузки RAG-статуса лент");
+    return res.json();
+  },
+
+  async collectionRagStatus(collectionId: number): Promise<{
+    total: number;
+    indexed: number;
+    ready: boolean;
+  }> {
+    const res = await fetch(`${API_BASE}/api/bertopic/collections/${collectionId}/rag-status`, { headers: authHeaders() });
+    handleUnauthorized(res);
+    if (!res.ok) throw new Error("Ошибка загрузки RAG-статуса коллекции");
+    return res.json();
+  },
+
   async feedDigest(params: {
     feed_ids: number[];
     collection_id?: number;
@@ -569,7 +596,12 @@ export const api = {
       body: JSON.stringify({ ...params, ...gigachatParams() }),
     });
     handleUnauthorized(res);
-    if (!res.ok) throw new Error("Ошибка дайджеста");
+    if (!res.ok) {
+      if (res.status === 403) throw new Error("Вы не подписаны на эту ленту");
+      let detail = "Ошибка дайджеста";
+      try { detail = (await res.json()).detail ?? detail; } catch {}
+      throw new Error(detail);
+    }
     return res.json();
   },
 

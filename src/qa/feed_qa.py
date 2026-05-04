@@ -138,7 +138,7 @@ def _answer_via_bertopic(
     options: FeedQAOptions,
     conn,
 ) -> FeedQAResult:
-    """In-memory similarity по статьям BERTopic-коллекции."""
+    """In-memory similarity по статьям BERTopic-коллекции (fallback когда RAG не готов)."""
     from src.tools.db_state import get_articles_for_bertopic_collection
 
     rows = get_articles_for_bertopic_collection(
@@ -153,6 +153,70 @@ def _answer_via_bertopic(
             article_count=0,
         )
     return _inmemory_similarity(query, rows, options)
+
+
+def _answer_via_rag_bertopic(
+    query: str,
+    rag_collection_id: int,
+    bertopic_collection_id: int,
+    options: FeedQAOptions,
+    conn,
+) -> FeedQAResult:
+    """RAG-путь для BERTopic-коллекции: pgvector поиск с фильтром по bertopic_assignments."""
+    from src.qa.retrieval import embed_query, retrieve_chunks_by_collection
+    from src.qa.rerank import rerank_chunks
+
+    _, q_emb = embed_query(query)
+    chunks = retrieve_chunks_by_collection(
+        conn,
+        q_emb,
+        rag_collection_id=rag_collection_id,
+        bertopic_collection_id=bertopic_collection_id,
+        top_k=40,
+        date_from=options.from_date,
+        date_to=options.to_date,
+    )
+    if not chunks:
+        return _answer_via_bertopic(query, bertopic_collection_id, options, conn)
+
+    try:
+        reranked = rerank_chunks(query, chunks, top_k_rerank=options.top_k)
+        top_chunks = [rc.chunk for rc in reranked]
+    except Exception as e:
+        logger.warning("FeedQA RAG BERTopic: rerank недоступен (%s), используем retrieval порядок", e)
+        top_chunks = chunks[: options.top_k]
+
+    context_lines: List[str] = []
+    sources: List[FeedQASource] = []
+    link_to_idx: dict = {}
+    for chunk in top_chunks:
+        if chunk.link not in link_to_idx:
+            link_to_idx[chunk.link] = len(link_to_idx) + 1
+            snippet = clean_text_for_llm(chunk.text_payload or "", max_chars=800)
+            sources.append(FeedQASource(
+                link=chunk.link,
+                title=chunk.title,
+                feed_name=chunk.source,
+                published_at=chunk.published_at,
+                snippet=snippet[:300],
+                article_id=chunk.article_id,
+            ))
+        idx = link_to_idx[chunk.link]
+        snippet = clean_text_for_llm(chunk.text_payload or "", max_chars=800)
+        context_lines.append(
+            f"[{idx}] {chunk.title}\n"
+            f"Источник: {chunk.source} | {chunk.link}\n"
+            f"{snippet}\n"
+        )
+
+    messages = _build_prompt(query, "\n".join(context_lines), options.language, n_fragments=len(context_lines))
+    answer_text = _call_gigachat(messages, options)
+
+    return FeedQAResult(
+        answer=answer_text,
+        sources=sources,
+        article_count=len(sources),
+    )
 
 
 # ── Путь 2: RAG (pgvector) ────────────────────────────────────────────────────
@@ -327,22 +391,38 @@ def answer_question_by_feeds(
 
     conn = get_connection()
 
-    # Путь 1: BERTopic-коллекция
+    # Путь 1: BERTopic-коллекция — RAG если готов, иначе in-memory
     if collection_id is not None:
+        try:
+            from src.tools.db_state import get_global_rag_collection, get_rag_coverage_for_collection
+            rag_collection = get_global_rag_collection(conn)
+            if rag_collection:
+                coverage = get_rag_coverage_for_collection(conn, rag_collection["id"], collection_id)
+                total, indexed = coverage["total"], coverage["indexed"]
+                if total > 0 and total == indexed:
+                    print(f"[QA] BERTopic collection_id={collection_id} → RAG ({indexed}/{total} статей)", flush=True)
+                    return _answer_via_rag_bertopic(query, rag_collection["id"], collection_id, options, conn)
+                else:
+                    print(f"[QA] BERTopic collection_id={collection_id} → in-memory ({indexed}/{total} статей проиндексировано)", flush=True)
+            else:
+                print(f"[QA] BERTopic collection_id={collection_id} → in-memory (RAG коллекция не создана)", flush=True)
+        except Exception as e:
+            logger.warning("FeedQA BERTopic: ошибка проверки RAG-индекса, fallback на in-memory: %s", e)
         return _answer_via_bertopic(query, collection_id, options, conn)
 
     # Путь 2 / 3: по лентам — RAG или in-memory
-    # RAG включается только при 100% покрытии: все статьи с full_text уже проиндексированы.
-    # Частичный индекс → in-memory по ai_summary всей ленты: полный охват важнее качества чанков.
+    # RAG включается только когда все статьи именно этих лент проиндексированы.
     try:
-        from src.tools.db_state import get_global_rag_collection, get_rag_chunk_count, get_rag_pending_for_feeds
+        from src.tools.db_state import get_global_rag_collection, get_rag_coverage_for_feeds
         rag_collection = get_global_rag_collection(conn)
         if rag_collection and feed_ids:
-            pending = get_rag_pending_for_feeds(conn, feed_ids, user_id)
-            if pending == 0:
-                chunk_count = get_rag_chunk_count(conn, rag_collection["id"], feed_ids, user_id)
-                if chunk_count > 0:
-                    return _answer_via_rag(query, rag_collection["id"], feed_ids, user_id, options, conn)
+            coverage = get_rag_coverage_for_feeds(conn, rag_collection["id"], feed_ids, user_id)
+            total, indexed = coverage["total"], coverage["indexed"]
+            if total > 0 and total == indexed:
+                print(f"[QA] feeds={feed_ids} → RAG ({indexed}/{total} статей)", flush=True)
+                return _answer_via_rag(query, rag_collection["id"], feed_ids, user_id, options, conn)
+            else:
+                print(f"[QA] feeds={feed_ids} → in-memory ({indexed}/{total} статей проиндексировано)", flush=True)
     except Exception as e:
         logger.warning("FeedQA: ошибка проверки RAG-индекса, fallback на in-memory: %s", e)
 

@@ -355,3 +355,65 @@ def test_global_collection_used_for_upsert():
 
     assert captured_collection_id == [99]
     # discipline/ga/activity = NULL — глобальная коллекция не привязана к таксономии
+
+
+# ── get_embedding_model ───────────────────────────────────────────────────────
+
+def test_get_embedding_model_returns_model():
+    """get_embedding_model() возвращает рабочую модель SentenceTransformer."""
+    from sentence_transformers import SentenceTransformer
+    from src.pipeline.embedding_filter import get_embedding_model
+    model = get_embedding_model()
+    assert isinstance(model, SentenceTransformer)
+
+
+# ── Fallback на summary ───────────────────────────────────────────────────────
+
+def test_summary_used_as_fallback_when_no_fulltext():
+    """Статья без full_text но с summary → summary используется для чанкирования."""
+    conn = MagicMock()
+    article = _make_article(1, full_text="", summary="Краткое содержание статьи.")
+    captured_docs = []
+
+    def capture_upsert(conn, collection_id, discipline, ga, activity, documents):
+        captured_docs.extend(documents)
+        return len(documents)
+
+    with patch("src.tools.db_state.get_or_create_global_rag_collection",
+               return_value={"id": 1}), \
+         patch("src.tools.db_state.get_articles_for_rag_indexing",
+               return_value=[article]), \
+         patch("src.tools.db_state.delete_rag_documents_by_links"), \
+         patch("src.tools.db_state.upsert_rag_documents", side_effect=capture_upsert), \
+         patch("src.tools.db_state.mark_articles_rag_indexed"), \
+         patch("src.pipeline.embedding_filter.get_embedding_model",
+               return_value=_fake_model()):
+
+        result = index_pending_articles(conn)
+
+    assert result["indexed"] == 1
+    assert len(captured_docs) > 0
+    assert "Краткое содержание" in captured_docs[0]["text_payload"]
+
+
+def test_no_fulltext_and_no_summary_counted_as_failed():
+    """Статья без full_text и без summary → статья считается failed."""
+    conn = MagicMock()
+    article = _make_article(1, full_text="", summary="")
+
+    with patch("src.tools.db_state.get_or_create_global_rag_collection",
+               return_value={"id": 1}), \
+         patch("src.tools.db_state.get_articles_for_rag_indexing",
+               return_value=[article]), \
+         patch("src.tools.db_state.delete_rag_documents_by_links"), \
+         patch("src.tools.db_state.upsert_rag_documents") as mock_upsert, \
+         patch("src.tools.db_state.mark_articles_rag_indexed") as mock_mark, \
+         patch("src.pipeline.embedding_filter.get_embedding_model",
+               return_value=_fake_model()):
+
+        result = index_pending_articles(conn)
+
+    assert result["failed"] == 1
+    assert result["indexed"] == 0
+    mock_upsert.assert_not_called()
+    mock_mark.assert_not_called()
