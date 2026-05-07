@@ -26,6 +26,9 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from src.auth.auth import get_current_user, hash_password, verify_password, create_access_token
 from config.config import ALLOWED_ORIGINS
 
@@ -38,6 +41,9 @@ from .schemas import (
     AuthRegister,
     AuthLogin,
     AuthResponse,
+    ForgotPasswordRequest,
+    VerifyResetCodeRequest,
+    ResetPasswordRequest,
     BookmarkRequest,
     SummarizeResponse,
     SummarizeRequest,
@@ -285,6 +291,66 @@ def change_password(body: ChangePasswordRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail="Неверный текущий пароль")
     update_user_password(conn, current_user["id"], hash_password(body.new_password))
     conn.commit()
+    return {"ok": True}
+
+
+@app.post(
+    "/api/auth/forgot-password",
+    tags=["Auth"],
+    summary="Запрос кода сброса пароля",
+)
+@limiter.limit("3/minute")
+def forgot_password(request: Request, body: ForgotPasswordRequest):
+    from src.tools.db_state import get_connection, get_user_by_email, create_password_reset_code
+    from src.tools.email_service import send_password_reset_code
+
+    # Всегда возвращаем одинаковый ответ — защита от перебора email
+    conn = get_connection()
+    if conn is not None:
+        email = body.email.strip().lower()
+        user = get_user_by_email(conn, email)
+        if user:
+            code = f"{secrets.randbelow(1_000_000):06d}"
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+            create_password_reset_code(conn, user["id"], code, expires_at)
+            send_password_reset_code(email, code)
+    return {"ok": True, "message": "Если аккаунт существует — письмо с кодом отправлено"}
+
+
+def _get_valid_code_or_raise(email: str, code: str):
+    """Проверяет код сброса пароля. Возвращает запись или бросает 400/503."""
+    from src.tools.db_state import get_connection, get_valid_reset_code
+    conn = get_connection()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="БД недоступна")
+    record = get_valid_reset_code(conn, email.strip().lower(), code)
+    if record is None:
+        raise HTTPException(status_code=400, detail="Неверный или просроченный код")
+    return conn, record
+
+
+@app.post(
+    "/api/auth/verify-reset-code",
+    tags=["Auth"],
+    summary="Проверка кода сброса пароля",
+)
+@limiter.limit("10/minute")
+def verify_reset_code(request: Request, body: VerifyResetCodeRequest):
+    _get_valid_code_or_raise(body.email, body.code)
+    return {"ok": True}
+
+
+@app.post(
+    "/api/auth/reset-password",
+    tags=["Auth"],
+    summary="Сброс пароля по коду",
+)
+@limiter.limit("5/minute")
+def reset_password(request: Request, body: ResetPasswordRequest):
+    from src.tools.db_state import reset_password_atomically
+
+    conn, record = _get_valid_code_or_raise(body.email, body.code)
+    reset_password_atomically(conn, record["user_id"], record["id"], hash_password(body.new_password))
     return {"ok": True}
 
 

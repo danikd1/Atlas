@@ -5,6 +5,9 @@ import getpass
 import os
 from enum import Enum
 
+from dotenv import load_dotenv
+load_dotenv()  # загружает .env из корня проекта при локальном запуске; в Docker игнорируется
+
 
 class RelevanceStatus(str, Enum):
     """Статусы релевантности статей."""

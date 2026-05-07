@@ -637,9 +637,49 @@ export const api = {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.detail || "Ошибка регистрации");
+      const detail = data.detail;
+      const message = Array.isArray(detail)
+        ? detail.map((e: any) => e.msg).join(", ")
+        : detail || "Ошибка регистрации";
+      throw new Error(message);
     }
     return res.json();
+  },
+
+  async forgotPassword(email: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка отправки кода");
+    }
+  },
+
+  async verifyResetCode(email: string, code: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/auth/verify-reset-code`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "Неверный или просроченный код");
+    }
+  },
+
+  async resetPassword(email: string, code: string, newPassword: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code, new_password: newPassword }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "Ошибка сброса пароля");
+    }
   },
 
   async getMe(): Promise<{ id: number; email: string; created_at?: string }> {

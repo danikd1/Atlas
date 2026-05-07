@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate, Navigate } from "react-router";
-import { Rss, Home, Search, X, Map, LogOut, User, Play, Pause, Database } from "lucide-react";
+import { Rss, Home, Search, X, Map, LogOut, User, Play, Pause, Database, GraduationCap } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
 import { ProfileModal } from "./ProfileModal";
@@ -9,6 +9,7 @@ import { ArticleSource, OutletCtx } from "../types";
 import { api, ApiArticleItem } from "../lib/api";
 import { authService } from "../lib/authService";
 import atlasLogo from "../assets/atlas-logo2.png";
+import { HandbookModal, shouldShowHandbook } from "./HandbookModal";
 
 export function Root() {
   // ── Auth guard ────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export function Root() {
   }, []);
 
   const [showProfile, setShowProfile] = useState(false);
+  const [showHandbook, setShowHandbook] = useState(shouldShowHandbook);
 
   // ── RAG index bar ─────────────────────────────────────────────
   const [ragStatus, setRagStatus] = useState<{
@@ -196,6 +198,13 @@ export function Root() {
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
+      {showHandbook && (
+        <HandbookModal
+          closable={!shouldShowHandbook()}
+          onClose={() => setShowHandbook(false)}
+          onOpenProfile={() => { setShowHandbook(false); setShowProfile(true); }}
+        />
+      )}
       <header ref={headerRef} className="relative bg-white border-b border-gray-200 z-50 flex-shrink-0">
         <div className="px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-4">
 
@@ -401,6 +410,14 @@ export function Root() {
               );
             })()}
 
+            <button
+              onClick={() => setShowHandbook(true)}
+              className="px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+              title="Справочник"
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span className="hidden sm:inline">Справочник</span>
+            </button>
             <button
               onClick={() => setShowProfile(true)}
               className="px-3 py-2 rounded-md text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors flex items-center gap-1.5"

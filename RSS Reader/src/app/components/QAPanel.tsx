@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { Send, Loader2, Clock, ChevronDown, ChevronRight, AlertTriangle, Play, CheckCircle2 } from "lucide-react";
 import { api } from "../lib/api";
 import { qaCache, qaCacheKey, type QAHistoryItem, type QASource } from "../lib/qaCache";
+import { FeatureHint } from "./FeatureHint";
 
 interface QAPanelProps {
   feedIds: number[];
@@ -291,6 +292,22 @@ export function QAPanel({ feedIds, collectionId }: QAPanelProps) {
 
   return (
     <div className="border-t border-gray-100 bg-gray-50">
+      {/* Заголовок панели */}
+      <div className="px-3 pt-3 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Вопрос-ответ</span>
+        <FeatureHint
+          title="Вопрос-ответ (QA)"
+          description="Задавайте вопросы на естественном языке — система найдёт ответ в статьях выбранной ленты."
+          bullets={[
+            "Поиск по полным текстам через векторную базу знаний (RAG)",
+            "Ответ формируется с указанием конкретных источников",
+            "Чем больше статей проиндексировано — тем точнее ответ",
+          ]}
+          side="left"
+          align="start"
+        />
+      </div>
+
       {/* RAG готов — баннер */}
       {ragReady && !ragUnavailable && (
         <div className="mx-3 mt-3 px-3 py-2 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2">

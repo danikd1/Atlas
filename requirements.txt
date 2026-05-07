@@ -39,3 +39,6 @@ python-multipart>=0.0.6
 # Rate limiting
 slowapi>=0.1.9
 
+# Загрузка .env при локальном запуске
+python-dotenv>=1.0.0
+

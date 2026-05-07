@@ -4,6 +4,7 @@ import { RefreshCw, Loader2, Map, AlertCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { BubbleMap, type TopicBubble } from "./BubbleMap";
 import type { OutletCtx } from "../types";
+import { FeatureHint } from "./FeatureHint";
 
 function NeuralNetBg() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -200,6 +201,17 @@ export function TopicMapPage() {
           {topics.length > 0 && (
             <span className="text-xs text-gray-400 ml-1">{topics.length} тем</span>
           )}
+          <FeatureHint
+            title="Карта тем (BERTopic)"
+            description="Нейросетевой анализ всех статей: система автоматически находит смысловые кластеры и визуализирует их в виде пузырей."
+            bullets={[
+              "Размер пузыря = количество статей в теме",
+              "Нажмите на тему — откроются связанные статьи",
+              "Чем свежее данные, тем актуальнее карта",
+            ]}
+            side="bottom"
+            align="start"
+          />
         </div>
 
         <div className="flex items-center gap-3">

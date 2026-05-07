@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { Loader2, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import { digestCache, digestCacheKey, type CachedDigest } from "../lib/digestCache";
+import { FeatureHint } from "./FeatureHint";
 
 interface DigestPanelProps {
   feedIds: number[];
@@ -190,6 +191,22 @@ export function DigestPanel({ feedIds, collectionId }: DigestPanelProps) {
 
   return (
     <div className="border-t border-gray-100 bg-gray-50">
+      {/* Заголовок панели */}
+      <div className="px-3 pt-3 flex items-center justify-between">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Дайджест</span>
+        <FeatureHint
+          title="Дайджест"
+          description="Краткое структурированное резюме всех статей за выбранный период, сгруппированное по смысловым категориям."
+          bullets={[
+            "Тренды, методы, инструменты и кейсы — в одном месте",
+            "Выберите период: день, неделя или месяц",
+            "Результат кэшируется — повторный запрос мгновенный",
+          ]}
+          side="left"
+          align="start"
+        />
+      </div>
+
       <div className="p-3 flex items-center gap-2">
         <div className="flex rounded-lg border border-gray-200 overflow-hidden flex-shrink-0">
           {(["day", "week", "month"] as Period[]).map((p) => (

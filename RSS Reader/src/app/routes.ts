@@ -8,10 +8,12 @@ import { SourceHubPage } from "./components/SourceHubPage";
 import { TopicMapPage } from "./components/TopicMapPage";
 import { LoginPage } from "./components/LoginPage";
 import { RegisterPage } from "./components/RegisterPage";
+import { ForgotPasswordPage } from "./components/ForgotPasswordPage";
 
 export const router = createBrowserRouter([
   { path: "login", Component: LoginPage },
   { path: "register", Component: RegisterPage },
+  { path: "forgot-password", Component: ForgotPasswordPage },
   {
     path: "/",
     Component: Root,

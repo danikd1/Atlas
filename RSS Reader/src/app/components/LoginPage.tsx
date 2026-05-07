@@ -183,7 +183,7 @@ export function LoginPage() {
             <input
               type="password"
               required
-              minLength={6}
+              minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -191,7 +191,7 @@ export function LoginPage() {
                 background: "rgba(255,255,255,0.07)",
                 border: "1px solid rgba(255,255,255,0.12)",
               }}
-              placeholder="Минимум 6 символов"
+              placeholder="Минимум 8 символов"
             />
           </div>
 
@@ -207,6 +207,11 @@ export function LoginPage() {
             Нет аккаунта?{" "}
             <Link to="/register" className="text-blue-400 hover:text-blue-300 hover:underline">
               Зарегистрироваться
+            </Link>
+          </p>
+          <p className="text-sm text-center pt-1">
+            <Link to="/forgot-password" className="text-blue-400 hover:text-blue-300 hover:underline">
+              Забыли пароль?
             </Link>
           </p>
         </form>

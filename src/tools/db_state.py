@@ -97,6 +97,22 @@ def ensure_tables(conn) -> None:
             );
             """
         )
+        # Коды сброса пароля
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_codes (
+                id         SERIAL PRIMARY KEY,
+                user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                code       TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                used       BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_prc_user_id ON password_reset_codes (user_id);"
+        )
 
         # Таблица с обработанными статьями (title, summary нужны для пайплайна по окну из БД)
         cur.execute(
@@ -2335,6 +2351,75 @@ def update_user_password(conn, user_id: int, new_password_hash: str) -> None:
             "UPDATE users SET password_hash = %s WHERE id = %s;",
             (new_password_hash, user_id),
         )
+
+
+def create_password_reset_code(conn, user_id: int, code: str, expires_at) -> None:
+    """Сохраняет код сброса пароля, инвалидируя предыдущие коды этого пользователя.
+    Два запроса выполняются атомарно — явная транзакция поверх autocommit=True.
+    """
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute("BEGIN;")
+        try:
+            cur.execute(
+                "UPDATE password_reset_codes SET used = TRUE WHERE user_id = %s AND used = FALSE;",
+                (user_id,),
+            )
+            cur.execute(
+                "INSERT INTO password_reset_codes (user_id, code, expires_at) VALUES (%s, %s, %s);",
+                (user_id, code, expires_at),
+            )
+            cur.execute("COMMIT;")
+        except Exception:
+            cur.execute("ROLLBACK;")
+            raise
+
+
+def get_valid_reset_code(conn, email: str, code: str) -> Optional[dict]:
+    """Возвращает запись кода если он валиден (не использован, не просрочен) для данного email."""
+    if conn is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rc.id, rc.user_id
+            FROM password_reset_codes rc
+            JOIN users u ON u.id = rc.user_id
+            WHERE u.email = %s
+              AND rc.code = %s
+              AND rc.used = FALSE
+              AND rc.expires_at > NOW()
+            ORDER BY rc.created_at DESC
+            LIMIT 1;
+            """,
+            (email, code),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def reset_password_atomically(conn, user_id: int, code_id: int, new_password_hash: str) -> None:
+    """Атомарно меняет пароль и помечает код использованным.
+    Оба запроса выполняются в одной транзакции — если один упадёт, оба откатятся.
+    """
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute("BEGIN;")
+        try:
+            cur.execute(
+                "UPDATE users SET password_hash = %s WHERE id = %s;",
+                (new_password_hash, user_id),
+            )
+            cur.execute(
+                "UPDATE password_reset_codes SET used = TRUE WHERE id = %s;",
+                (code_id,),
+            )
+            cur.execute("COMMIT;")
+        except Exception:
+            cur.execute("ROLLBACK;")
+            raise
 
 
 # ---------------------------------------------------------------------------
