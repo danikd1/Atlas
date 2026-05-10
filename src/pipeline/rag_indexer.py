@@ -196,3 +196,75 @@ def index_pending_articles(conn, batch_size: int = 50) -> dict:
         indexed, chunks_created, failed,
     )
     return {"indexed": indexed, "chunks_created": chunks_created, "failed": failed}
+
+
+def index_summary_embeddings(conn, batch_size: int = 100) -> dict:
+    """
+    Вычисляет и сохраняет эмбеддинги title + ai_summary в processed_articles.
+
+    Выбирает статьи у которых ai_summary IS NOT NULL AND ai_summary_embedding IS NULL.
+    Независимо от rag_indexed_at — охватывает и старые и новые статьи.
+
+    Returns:
+        {"indexed": int, "failed": int}
+    """
+    from src.pipeline.embedding_filter import get_embedding_model
+    from src.tools.db_state import _embedding_to_vector_str
+    from src.digest.load_chunks import make_summary_text
+    from config.config import DEFAULT_EMBED_BATCH_SIZE, POSTGRES_TABLE_PROCESSED_ARTICLES
+
+    if conn is None:
+        return {"indexed": 0, "failed": 0}
+
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT id, title, ai_summary
+            FROM {POSTGRES_TABLE_PROCESSED_ARTICLES}
+            WHERE ai_summary IS NOT NULL
+              AND ai_summary != ''
+              AND ai_summary_embedding IS NULL
+            ORDER BY published_at DESC NULLS LAST
+            LIMIT %s;
+            """,
+            (batch_size,),
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        return {"indexed": 0, "failed": 0}
+
+    print(f"\n[summary-embedder] Считаем эмбеддинги title + ai_summary для {len(rows)} статей...", flush=True)
+
+    model = get_embedding_model()
+    texts = [make_summary_text(row.get("title") or "", row.get("ai_summary") or "") for row in rows]
+
+    try:
+        embeddings = model.encode(
+            texts,
+            batch_size=DEFAULT_EMBED_BATCH_SIZE,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+    except Exception as e:
+        logger.error("summary-embedder: ошибка model.encode: %s", e)
+        return {"indexed": 0, "failed": len(rows)}
+
+    indexed = 0
+    failed = 0
+    with conn.cursor() as cur:
+        for row, emb in zip(rows, embeddings):
+            try:
+                emb_str = _embedding_to_vector_str(emb.tolist())
+                cur.execute(
+                    f"UPDATE {POSTGRES_TABLE_PROCESSED_ARTICLES} SET ai_summary_embedding = %s::vector WHERE id = %s;",
+                    (emb_str, row["id"]),
+                )
+                indexed += 1
+            except Exception as e:
+                logger.warning("summary-embedder: ошибка сохранения id=%s: %s", row["id"], e)
+                failed += 1
+
+    conn.commit()
+    print(f"[summary-embedder] Готово: {indexed} эмбеддингов сохранено | Ошибок: {failed}", flush=True)
+    return {"indexed": indexed, "failed": failed}

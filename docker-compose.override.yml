@@ -1,0 +1,27 @@
+# Локальные переопределения для разработки на Mac.
+# Docker автоматически мержит этот файл с docker-compose.yml при `docker compose up`.
+# На сервере этого файла нет — там используется только чистый docker-compose.yml.
+
+services:
+
+  db:
+    ports:
+      # 5433 на хосте вместо 5432 — на Mac уже занят локальным PostgreSQL
+      - "127.0.0.1:5433:5432"
+
+  api:
+    environment:
+      # Swagger UI доступен на /docs при локальной разработке
+      ENVIRONMENT: development
+
+  worker-extraction:
+    environment:
+      # Если модель уже скачана в hf-cache — не обращаемся к HuggingFace при старте.
+      # Закомментируй при первом запуске чтобы модель скачалась.
+      HF_HUB_OFFLINE: "1"
+
+  worker-rag:
+    environment:
+      # Если модель уже скачана в hf-cache — не обращаемся к HuggingFace при старте.
+      # Закомментируй при первом запуске чтобы модель скачалась.
+      HF_HUB_OFFLINE: "1"

@@ -57,7 +57,7 @@ _pause_event.set()  # не на паузе при старте
 
 def _do_indexing() -> None:
     from src.tools.db_state import get_connection
-    from src.pipeline.rag_indexer import index_pending_articles
+    from src.pipeline.rag_indexer import index_pending_articles, index_summary_embeddings
 
     _state["running"] = True
     _state["error"] = None
@@ -83,6 +83,9 @@ def _do_indexing() -> None:
             result = index_pending_articles(conn)
             total_indexed += result["indexed"]
             total_chunks += result["chunks_created"]
+
+            # Попутно заполняем кэш эмбеддингов title + ai_summary
+            index_summary_embeddings(conn)
 
             if result["indexed"] == 0:
                 # Очередь пуста — выходим из цикла

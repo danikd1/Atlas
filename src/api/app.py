@@ -12,6 +12,11 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 from pathlib import Path
 from typing import Optional
 

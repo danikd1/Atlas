@@ -112,7 +112,7 @@ export function TopicMapPage() {
   const [taskProgress, setTaskProgress] = useState(0);
   const [taskMessage, setTaskMessage] = useState("");
   const [taskError, setTaskError] = useState<string | null>(null);
-  const [daysBack, setDaysBack] = useState(30);
+  const [daysBack, setDaysBack] = useState(7);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isRunningRef = useRef(false); // синхронная защита от двойного клика
 
@@ -221,9 +221,9 @@ export function TopicMapPage() {
               <span className="text-xs text-gray-400 whitespace-nowrap">За последние</span>
               <input
                 type="range"
-                min={7}
-                max={90}
-                step={7}
+                min={1}
+                max={7}
+                step={1}
                 value={daysBack}
                 onChange={(e) => setDaysBack(Number(e.target.value))}
                 className="w-24 accent-blue-600"

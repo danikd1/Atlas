@@ -137,6 +137,7 @@ def ensure_tables(conn) -> None:
             "ai_summary TEXT",
             "full_text_error BOOLEAN DEFAULT FALSE",
             "rag_indexed_at TIMESTAMPTZ",
+            f"ai_summary_embedding vector({EMBEDDING_DIM})",
         ):
             try:
                 cur.execute(
@@ -2157,6 +2158,7 @@ def get_articles_by_feed_ids(
             f"""
             SELECT pa.id, pa.link, pa.title, pa.ai_summary, pa.summary,
                    pa.full_text, pa.published_at, pa.source, pa.feed_id,
+                   pa.ai_summary_embedding::text AS ai_summary_embedding_str,
                    rf.name AS feed_name
             FROM processed_articles pa
             LEFT JOIN feeds rf ON rf.id = pa.feed_id
@@ -2242,6 +2244,7 @@ def get_articles_for_bertopic_collection(
                 pa.source,
                 pa.published_at,
                 pa.feed_id,
+                pa.ai_summary_embedding::text AS ai_summary_embedding_str,
                 (ar.link IS NOT NULL) AS is_read,
                 (ab.link IS NOT NULL) AS is_saved
             FROM {POSTGRES_TABLE_COLLECTIONS} c

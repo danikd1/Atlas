@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, List, Optional
 
+import numpy as np
+
 from config.config import (
     POSTGRES_ENABLED,
     POSTGRES_TABLE_RAG_DOCUMENTS,
@@ -20,19 +22,70 @@ from src.tools.db_state import get_connection
 def _embedding_from_row(row: Any) -> Optional[List[float]]:
     """Достаёт вектор эмбеддинга из строки БД (pgvector может вернуть list или str)."""
     emb = row.get("embedding")
-    if emb is None:
+    return parse_embedding(emb)
+
+
+def parse_embedding(value: Any) -> Optional[List[float]]:
+    """Парсит значение pgvector (list, tuple или строку '[0.1,0.2,...]') в list[float].
+    Переиспользуется в pipeline.py и feed_digest.py чтобы не дублировать логику.
+    """
+    if value is None:
         return None
-    if isinstance(emb, (list, tuple)):
-        return [float(x) for x in emb]
-    if isinstance(emb, str):
-        # "[0.1,0.2,...]" -> list of float
-        s = emb.strip()
+    if isinstance(value, (list, tuple)):
+        return [float(x) for x in value]
+    if isinstance(value, str):
+        s = value.strip()
         if s.startswith("[") and s.endswith("]"):
             s = s[1:-1]
         if not s:
             return None
         return [float(x.strip()) for x in s.split(",")]
     return None
+
+
+# Стандартный разделитель для текста title + ai_summary.
+# Используется при сохранении кэша (rag_indexer) и при чтении (BERTopic, дайджест).
+SUMMARY_TEXT_SEP = ". "
+
+
+def make_summary_text(title: str, summary: str) -> str:
+    """Формирует текст title + ai_summary для эмбеддирования. Единый формат для кэша и потребителей."""
+    title = (title or "").strip()
+    summary = (summary or "").strip()
+    if title and summary:
+        return f"{title}{SUMMARY_TEXT_SEP}{summary}"
+    return title or summary or "—"
+
+
+def mix_embeddings(
+    texts: List[str],
+    cached: List[Optional[np.ndarray]],
+    encode_fn,
+) -> np.ndarray:
+    """Смешанный режим: берёт эмбеддинги из кэша где есть, досчитывает остаток через encode_fn.
+
+    Args:
+        texts: тексты для эмбеддирования (используются только для отсутствующих в кэше)
+        cached: список кэшированных эмбеддингов (None если нет кэша)
+        encode_fn: callable(list[str]) -> np.ndarray — функция кодирования
+
+    Returns:
+        np.ndarray shape (len(texts), embedding_dim)
+    """
+    result: List[Optional[np.ndarray]] = list(cached)
+    missing_indices, missing_texts = [], []
+
+    for i, emb in enumerate(cached):
+        if emb is None:
+            missing_indices.append(i)
+            missing_texts.append(texts[i])
+
+    if missing_texts:
+        fresh = encode_fn(missing_texts)
+        for idx, emb in zip(missing_indices, fresh):
+            result[idx] = emb
+
+    return np.array(result, dtype="float32")
 
 
 @dataclass

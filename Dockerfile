@@ -11,9 +11,12 @@ COPY requirements.txt .
 
 # CPU-версия torch вместо CUDA — экономим ~4 GB на образе
 # Должна устанавливаться ДО остальных пакетов чтобы pip не подтянул CUDA-версию
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# --mount=type=cache сохраняет скачанные пакеты между сборками → повторная сборка занимает секунды
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 COPY . .
 

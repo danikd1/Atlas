@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 from config.config import (
     DIGEST_LLM_LANGUAGE,
     DIGEST_MAX_ARTICLES_PER_CLUSTER,
@@ -27,13 +29,14 @@ from config.config import (
 )
 from src.digest.clustering import ChunkWithCluster, cluster_chunks, get_typical_chunks_for_cluster
 from src.digest.describe_and_classify import describe_and_classify_cluster_from_chunks
-from src.digest.load_chunks import ChunkRow
+from src.digest.load_chunks import ChunkRow, parse_embedding, make_summary_text, mix_embeddings
 from src.digest.sections import ArticleRef, ClusterInfo, assign_clusters_to_sections
 from src.pipeline.embedding_filter import get_embedding_model
 from src.tools.db_state import get_articles_by_feed_ids, get_connection
 from src.tools.llm_utils import create_gigachat_client
 
 logger = logging.getLogger(__name__)
+
 
 
 @dataclass
@@ -135,18 +138,23 @@ def build_digest_by_feeds(
     if not rows:
         return empty_result
 
-    # Тексты для эмбеддирования
-    texts = []
+    # Тексты и кэш эмбеддингов из БД
+    texts, cached_embeddings = [], []
     for row in rows:
-        text = row.get("title") or ""
-        body = row.get("ai_summary") or row.get("summary") or ""
-        if body:
-            text = f"{text}\n{body}"
-        texts.append(text.strip() or "—")
+        texts.append(make_summary_text(row.get("title") or "", row.get("ai_summary") or row.get("summary") or ""))
+        parsed = parse_embedding(row.get("ai_summary_embedding_str"))
+        cached_embeddings.append(np.array(parsed, dtype="float32") if parsed else None)
 
-    # Эмбеддируем
+    # Смешанный режим через общую утилиту
+    cached_count = sum(1 for e in cached_embeddings if e is not None)
+    print(f"[digest] Эмбеддинги: {cached_count} из кэша, {len(texts) - cached_count} через модель (всего {len(texts)} статей)", flush=True)
+    logger.info("Дайджест: эмбеддинги %d из кэша, %d через модель (всего %d статей)", cached_count, len(texts) - cached_count, len(texts))
     model = get_embedding_model(EMBEDDING_MODEL_NAME)
-    embeddings = model.encode(texts, normalize_embeddings=True, batch_size=32, show_progress_bar=False)
+    embeddings = mix_embeddings(
+        texts,
+        cached_embeddings,
+        lambda t: model.encode(t, normalize_embeddings=True, batch_size=32, show_progress_bar=False),
+    )
 
     chunks = _rows_to_chunk_rows(rows, embeddings)
 

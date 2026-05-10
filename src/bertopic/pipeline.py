@@ -87,7 +87,7 @@ def run_async(
 MAX_ARTICLES_BERTOPIC = 5000  # UMAP квадратично растёт — выше 5k часы на CPU
 
 def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, days_back=None, user_id=None, gigachat_credentials=None, gigachat_model=None):
-    _set(task_id, status="running", progress=0.0, message="Инициализация...")
+    _set(task_id, status="running", progress=0.0, message="Подготовка...")
 
     try:
         model_version = datetime.now().strftime("%Y%m%d")
@@ -96,42 +96,47 @@ def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, 
         effective_limit = min(limit, MAX_ARTICLES_BERTOPIC) if limit else MAX_ARTICLES_BERTOPIC
 
         # ── [1/6] Загрузка статей ──────────────────────────────────────────
-        _set(task_id, progress=0.05, message="Загружаем статьи из БД...")
-        docs, meta = _load_articles(limit=effective_limit, source_filter=source_filter, days_back=days_back, user_id=user_id)
+        _set(task_id, progress=0.05, message="Загружаем статьи...")
+        docs, meta, cached_embeddings = _load_articles(limit=effective_limit, source_filter=source_filter, days_back=days_back, user_id=user_id)
 
-        if len(docs) < 20:
+        if len(docs) < 2:
             raise ValueError(
-                f"Недостаточно статей: {len(docs)}. Нужно минимум 20 "
-                f"(рекомендуется 100+). Запустите сбор RSS."
+                f"Недостаточно статей: {len(docs)}. Запустите сбор RSS."
             )
 
         _set(task_id, progress=0.1, message=f"Загружено {len(docs)} статей")
 
         # ── [2/6] Эмбеддинги ──────────────────────────────────────────────
-        _set(task_id, progress=0.15, message=f"Вычисляем эмбеддинги ({len(docs)} статей)...")
-        embeddings = _compute_embeddings(docs)
-        _set(task_id, progress=0.35, message="Эмбеддинги готовы")
+        cached_count = sum(1 for e in cached_embeddings if e is not None)
+        fresh_count = len(docs) - cached_count
+        _set(task_id, progress=0.15, message=f"Анализируем: {cached_count} уже готовы, {fresh_count} обрабатываем впервые")
+        logger.info("Эмбеддинги: %d из кэша, %d через модель (всего %d)", cached_count, fresh_count, len(docs))
+        embeddings = _compute_embeddings(docs, cached_embeddings)
 
         # ── [3/6] BERTopic ────────────────────────────────────────────────
-        _set(task_id, progress=0.38, message=f"Запускаем BERTopic (min_topic_size={min_topic_size})...")
+        _set(task_id, progress=0.38, message="Ищем темы...")
+        logger.info("Запускаем BERTopic (min_topic_size=%d)...", min_topic_size)
         topic_model, topics, probs = _run_bertopic(docs, embeddings, min_topic_size)
 
         info = topic_model.get_topic_info()
         n_topics = len(info[info["Topic"] >= 0])
-        _set(task_id, progress=0.6, message=f"BERTopic завершён: {n_topics} тем")
+        _set(task_id, progress=0.6, message=f"Найдено {n_topics} тем")
+        logger.info("BERTopic завершён: %d тем", n_topics)
 
         # ── [4/6] Сохранение CSV ──────────────────────────────────────────
-        _set(task_id, progress=0.62, message="Сохраняем результаты в CSV...")
+        logger.info("Сохраняем результаты в CSV...")
         topics_data = _save_outputs(topic_model, topics, meta, docs, n_categories)
-        _set(task_id, progress=0.7, message=f"CSV сохранены в {OUTPUT_DIR.name}/")
+        logger.info("CSV сохранены в %s/", OUTPUT_DIR.name)
 
         # ── [5/6] Коллекции в БД ──────────────────────────────────────────
-        _set(task_id, progress=0.72, message="Создаём коллекции в БД...")
+        _set(task_id, progress=0.72, message="Формируем карту...")
+        logger.info("Создаём коллекции в БД...")
         n_collections, n_assignments = _load_to_db(
             topic_model, topics, meta, topics_data, model_version, owner_id=user_id,
             gigachat_credentials=gigachat_credentials, gigachat_model=gigachat_model,
         )
-        _set(task_id, progress=0.95, message=f"Создано {n_collections} коллекций, {n_assignments} назначений")
+        _set(task_id, progress=0.95, message="Почти готово...")
+        logger.info("Создано %d коллекций, %d назначений", n_collections, n_assignments)
 
         # ── [6/6] Готово ──────────────────────────────────────────────────
         _set(
@@ -156,13 +161,23 @@ def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, 
 
 # ── Step functions ─────────────────────────────────────────────────────────
 
+def _to_embedding(value) -> Optional[np.ndarray]:
+    """Конвертирует pgvector значение из БД в numpy array. Переиспользует parse_embedding из load_chunks."""
+    from src.digest.load_chunks import parse_embedding
+    parsed = parse_embedding(value)
+    if parsed is None:
+        return None
+    return np.array(parsed, dtype="float32")
+
+
 def _load_articles(
     limit: Optional[int],
     source_filter: Optional[str],
     days_back: Optional[int] = None,
     user_id: Optional[int] = None,
-) -> Tuple[List[str], List[Dict]]:
+) -> Tuple[List[str], List[Dict], List[Optional[np.ndarray]]]:
     from src.tools.db_state import get_connection
+    from src.digest.load_chunks import make_summary_text
     from config.config import POSTGRES_TABLE_PROCESSED_ARTICLES
 
     conn = get_connection()
@@ -191,7 +206,8 @@ def _load_articles(
     limit_clause = f"LIMIT {limit}" if limit else ""
 
     sql = f"""
-        SELECT pa.link, pa.title, pa.ai_summary, pa.summary, pa.source, pa.published_at
+        SELECT pa.link, pa.title, pa.ai_summary, pa.summary, pa.source, pa.published_at,
+               pa.ai_summary_embedding::text AS ai_summary_embedding_str
         FROM {POSTGRES_TABLE_PROCESSED_ARTICLES} pa
         WHERE {where}
         ORDER BY pa.published_at DESC NULLS LAST
@@ -203,45 +219,51 @@ def _load_articles(
         rows = cur.fetchall()
     conn.close()
 
-    docs, meta = [], []
+    docs, meta, cached_embeddings = [], [], []
     for row in rows:
         title = (row.get("title") or "").strip()
         body = (row.get("ai_summary") or row.get("summary") or "").strip()
         if not title:
             continue
-        docs.append(f"{title}. {body}" if body else title)
+        docs.append(make_summary_text(title, body))
         meta.append({
             "link": str(row.get("link") or ""),
             "title": title,
             "source": str(row.get("source") or ""),
             "published_at": row.get("published_at"),
         })
+        cached_embeddings.append(_to_embedding(row.get("ai_summary_embedding_str")))
 
-    return docs, meta
+    return docs, meta, cached_embeddings
 
 
-def _compute_embeddings(docs: List[str]) -> np.ndarray:
+def _compute_embeddings(docs: List[str], cached: Optional[List[Optional[np.ndarray]]] = None) -> np.ndarray:
     from src.pipeline.embedding_filter import get_embedding_model
+    from src.digest.load_chunks import mix_embeddings
     from config.config import DEFAULT_EMBED_BATCH_SIZE
 
     model = get_embedding_model()
-    embeddings = model.encode(
-        docs,
-        batch_size=DEFAULT_EMBED_BATCH_SIZE,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-    return embeddings.astype("float32")
+
+    def encode_fn(texts):
+        return model.encode(texts, batch_size=DEFAULT_EMBED_BATCH_SIZE, normalize_embeddings=True, show_progress_bar=False).astype("float32")
+
+    if cached is None:
+        cached = [None] * len(docs)
+
+    cached_count = sum(1 for e in cached if e is not None)
+    logger.info("Эмбеддинги: %d из кэша, %d через модель", cached_count, len(docs) - cached_count)
+
+    return mix_embeddings(docs, cached, encode_fn)
 
 
 def _run_bertopic(docs: List[str], embeddings: np.ndarray, min_topic_size: int):
     from bertopic import BERTopic
     from bertopic.representation import KeyBERTInspired
     from hdbscan import HDBSCAN
-    from sentence_transformers import SentenceTransformer
     from sklearn.feature_extraction.text import CountVectorizer
     from umap import UMAP
     from config.config import EMBEDDING_MODEL_NAME
+    from src.pipeline.embedding_filter import get_embedding_model
 
     n = len(docs)
     n_neighbors = min(15, max(2, n // 10))
@@ -260,7 +282,7 @@ def _run_bertopic(docs: List[str], embeddings: np.ndarray, min_topic_size: int):
         max_features=10000, stop_words="english",
     )
     representation_model = KeyBERTInspired()
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    embedding_model = get_embedding_model(EMBEDDING_MODEL_NAME)  # берём из кэша, не грузим повторно
 
     topic_model = BERTopic(
         embedding_model=embedding_model,
@@ -326,7 +348,10 @@ def _save_outputs(topic_model, topics, meta, docs, n_categories):
             if isinstance(emb_source, dict):
                 embs = np.array([emb_source[t] for t in valid_ids], dtype="float32")
             else:
-                embs = np.array([emb_source[t + 1] for t in valid_ids], dtype="float32")
+                # topic_embeddings_ может иметь n_topics или n_topics+1 элементов
+                # (в зависимости от версии BERTopic: с outlier-вектором или без)
+                offset = 1 if len(emb_source) > max(valid_ids) + 1 else 0
+                embs = np.array([emb_source[t + offset] for t in valid_ids], dtype="float32")
             norms = np.linalg.norm(embs, axis=1, keepdims=True)
             embs_norm = embs / np.where(norms == 0, 1.0, norms)
             km = KMeans(n_clusters=n_cat, random_state=42, n_init=10)
