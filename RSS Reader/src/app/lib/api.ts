@@ -13,6 +13,7 @@ export interface ApiFeed {
   description: string | null;
   category: string | null;
   enabled: boolean;
+  disabled_reason: string | null;
   error_count: number;
   last_fetched_at: string | null;
   last_error: string | null;
@@ -20,6 +21,11 @@ export interface ApiFeed {
   hidden: boolean;
   unread_count: number;
   created_at: string | null;
+}
+
+export interface ApiFeedAddResponse extends ApiFeed {
+  fetch_status: "ok" | "error" | "quiet";
+  fetch_error: string | null;
 }
 
 export interface ApiCatalogFeed {
@@ -95,6 +101,7 @@ export function apiFeedToRSSFeed(f: ApiFeed): RSSFeed {
     error_count: f.error_count,
     last_error: f.last_error ?? undefined,
     category: f.category ?? undefined,
+    disabled_reason: f.disabled_reason,
   };
 }
 
@@ -129,8 +136,8 @@ function gigachatParams(): { gigachat_credentials?: string; gigachat_model?: str
 // ─── API client ────────────────────────────────────────────────────────────
 
 export const api = {
-  async getFeeds(includeHidden = false): Promise<ApiFeed[]> {
-    const res = await fetch(`${API_BASE}/api/feeds?include_hidden=${includeHidden}`, { headers: authHeaders() });
+  async getFeeds(includeHidden = false, includeDisabled = false): Promise<ApiFeed[]> {
+    const res = await fetch(`${API_BASE}/api/feeds?include_hidden=${includeHidden}&include_disabled=${includeDisabled}`, { headers: authHeaders() });
     handleUnauthorized(res);
     if (!res.ok) throw new Error("Не удалось загрузить ленты");
     return res.json();
@@ -161,7 +168,7 @@ export const api = {
     description?: string | null;
     category?: string | null;
     folder_id?: number | null;
-  }): Promise<ApiFeed> {
+  }): Promise<ApiFeedAddResponse> {
     const res = await fetch(`${API_BASE}/api/feeds`, {
       method: "POST",
       headers: authHeaders(),

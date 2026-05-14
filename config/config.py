@@ -181,45 +181,21 @@ RSS_FEEDS = {
     # ══════════════════════════════════════════════════════════════
 
     # Engineering
-    "Atlassian: Engineering":          {"url": "https://www.atlassian.com/blog/atlassian-engineering/feed", "category": "Engineering"},
-    "Atlassian: Continuous Delivery":  {"url": "https://www.atlassian.com/blog/continuous-delivery/feed",  "category": "Engineering"},
-    "Atlassian: Developer":            {"url": "https://www.atlassian.com/blog/developer/feed",             "category": "Engineering"},
-    "Atlassian: Git":                  {"url": "https://www.atlassian.com/blog/git/feed",                  "category": "Engineering"},
-    "Atlassian: DevOps":               {"url": "https://www.atlassian.com/blog/devops/feed",               "category": "Cloud & DevOps"},
+    # Темы (новая структура блога, 2025)
+    "Atlassian: Leadership":    {"url": "https://www.atlassian.com/blog/topic/leadership/rss",   "category": "Management"},
+    "Atlassian: Teamwork":      {"url": "https://www.atlassian.com/blog/topic/teamwork/rss",     "category": "Management"},
+    "Atlassian: Innovation":    {"url": "https://www.atlassian.com/blog/topic/innovation/rss",   "category": "Management"},
+    "Atlassian: Development":   {"url": "https://www.atlassian.com/blog/topic/development/rss",  "category": "Engineering"},
+    "Atlassian: How We Build":  {"url": "https://www.atlassian.com/blog/topic/how-we-build/rss", "category": "Engineering"},
+    "Atlassian: AI Research":   {"url": "https://www.atlassian.com/blog/ai-research/rss",        "category": "AI & ML"},
 
-    # Management
-    "Atlassian: Agile":                {"url": "https://www.atlassian.com/blog/agile/feed",             "category": "Management"},
-    "Atlassian: Project Management":   {"url": "https://www.atlassian.com/blog/project-management/feed","category": "Management"},
-    "Atlassian: Leadership":           {"url": "https://www.atlassian.com/blog/leadership/feed",         "category": "Management"},
-    "Atlassian: Teamwork":             {"url": "https://www.atlassian.com/blog/teamwork/feed",           "category": "Management"},
-    "Atlassian: Productivity":         {"url": "https://www.atlassian.com/blog/productivity/feed",       "category": "Management"},
-    "Atlassian: Strategy":             {"url": "https://www.atlassian.com/blog/strategy/feed",           "category": "Management"},
-    "Atlassian: Work Management":      {"url": "https://www.atlassian.com/blog/work-management/feed",    "category": "Management"},
-    "Atlassian: Communication":        {"url": "https://www.atlassian.com/blog/communication/feed",      "category": "Management"},
-    "Atlassian: Distributed Work":     {"url": "https://www.atlassian.com/blog/distributed-work/feed",  "category": "Management"},
-    "Atlassian: Focus":                {"url": "https://www.atlassian.com/blog/focus/feed",              "category": "Management"},
-
-    # Tools
-    "Atlassian: Jira":                    {"url": "https://www.atlassian.com/blog/jira/feed",                    "category": "Tools"},
-    "Atlassian: Confluence":              {"url": "https://www.atlassian.com/blog/confluence/feed",              "category": "Tools"},
-    "Atlassian: Trello":                  {"url": "https://www.atlassian.com/blog/trello/feed",                  "category": "Tools"},
-    "Atlassian: Bitbucket":               {"url": "https://www.atlassian.com/blog/bitbucket/feed",               "category": "Tools"},
-    "Atlassian: Jira Service Management": {"url": "https://www.atlassian.com/blog/jira-service-management/feed", "category": "Tools"},
-    "Atlassian: Jira Product Discovery":  {"url": "https://www.atlassian.com/blog/jira-product-discovery/feed",  "category": "Tools"},
-    "Atlassian: Jira Align":              {"url": "https://www.atlassian.com/blog/jira-align/feed",              "category": "Tools"},
-    "Atlassian: Loom":                    {"url": "https://www.atlassian.com/blog/loom/feed",                    "category": "Tools"},
-    "Atlassian: Statuspage":              {"url": "https://www.atlassian.com/blog/statuspage/feed",              "category": "Tools"},
-    "Atlassian: Bamboo":                  {"url": "https://www.atlassian.com/blog/bamboo/feed",                  "category": "Tools"},
-    "Atlassian: IT Service Management":   {"url": "https://www.atlassian.com/blog/it-service-management/feed",   "category": "Tools"},
-    "Atlassian: Enterprise":              {"url": "https://www.atlassian.com/blog/enterprise/feed",              "category": "Tools"},
-    "Atlassian: Add-ons":                 {"url": "https://www.atlassian.com/blog/add-ons/feed",                 "category": "Tools"},
-    "Atlassian: Access":                  {"url": "https://www.atlassian.com/blog/access/feed",                  "category": "Tools"},
-
-    # Other
-    "Atlassian: AI":              {"url": "https://www.atlassian.com/blog/artificial-intelligence/feed", "category": "AI & ML"},
-    "Atlassian: Design":          {"url": "https://www.atlassian.com/blog/design/feed",                  "category": "Design"},
-    "Atlassian: Inside Atlassian":{"url": "https://www.atlassian.com/blog/inside-atlassian/feed",        "category": "Case Studies"},
-    "Atlassian: Announcements":   {"url": "https://www.atlassian.com/blog/announcements/feed",           "category": "Tech News"},
+    # Продукты
+    "Atlassian: Jira":                    {"url": "https://www.atlassian.com/blog/app/jira/rss",                    "category": "Tools"},
+    "Atlassian: Confluence":              {"url": "https://www.atlassian.com/blog/app/confluence/rss",              "category": "Tools"},
+    "Atlassian: Trello":                  {"url": "https://www.atlassian.com/blog/app/trello/rss",                  "category": "Tools"},
+    "Atlassian: Bitbucket":               {"url": "https://www.atlassian.com/blog/app/bitbucket/rss",               "category": "Engineering"},
+    "Atlassian: Loom":                    {"url": "https://www.atlassian.com/blog/app/loom/rss",                    "category": "Tools"},
+    "Atlassian: Jira Service Management": {"url": "https://www.atlassian.com/blog/app/jira-service-management/rss", "category": "Tools"},
 
     # ══════════════════════════════════════════════════════════════
     # TOPTAL

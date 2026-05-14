@@ -425,6 +425,63 @@ def ensure_tables(conn) -> None:
             """
         )
 
+        # Миграция: причина отключения ленты.
+        # 'error'  — автоотключена из-за HTTP-ошибок (24+ подряд)
+        # 'quiet'  — автоотключена из-за отсутствия статей 30+ дней
+        # 'manual' — отключена администратором вручную
+        # NULL     — лента включена
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS disabled_reason VARCHAR(10);
+            """
+        )
+        # Проставляем reason существующим отключённым лентам
+        cur.execute(
+            """
+            UPDATE feeds SET disabled_reason = 'error'
+            WHERE enabled = FALSE AND error_count > 0 AND disabled_reason IS NULL;
+            """
+        )
+        cur.execute(
+            """
+            UPDATE feeds SET disabled_reason = 'manual'
+            WHERE enabled = FALSE AND error_count = 0 AND disabled_reason IS NULL;
+            """
+        )
+
+        # Миграция: дата отключения ленты.
+        # Проставляется когда лента переходит в disabled_reason = 'error', 'quiet' или 'manual'.
+        # Сбрасывается в NULL когда лента включается обратно.
+        # Используется для очистки: ленты с disabled_at > 30 дней удаляются.
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ;
+            """
+        )
+        # Проставляем disabled_at существующим отключённым лентам (приблизительно — используем NOW())
+        cur.execute(
+            """
+            UPDATE feeds SET disabled_at = NOW()
+            WHERE enabled = FALSE AND disabled_at IS NULL;
+            """
+        )
+
+        # Миграция: флаг модерации ленты.
+        # Ставится когда пользователь отписался, но лента рабочая — кандидат в каталог.
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS pending_review BOOLEAN DEFAULT FALSE;
+            """
+        )
+
+        # Миграция: дата добавления ленты — используется для отключения зомби-лент
+        # у которых last_fetched_at IS NULL (ни разу не фетчились успешно).
+        cur.execute(
+            """
+            ALTER TABLE feeds ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+            """
+        )
+
         # Миграция: дата подписки пользователя (решение 1A).
         cur.execute(
             """
@@ -1077,14 +1134,19 @@ def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, ca
             INSERT INTO feeds (url, name, favicon_url, category, description)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (url) DO NOTHING
-            RETURNING id, url, name, favicon_url, category, description, enabled, error_count, last_fetched_at;
+            RETURNING id, url, name, favicon_url, category, description,
+                      enabled, error_count, last_fetched_at, disabled_reason, last_error;
             """,
             (url, name, favicon_url, category, description),
         )
         feed_row = cur.fetchone()
         if feed_row is None:
             cur.execute(
-                "SELECT id, url, name, favicon_url, category, description, enabled, error_count, last_fetched_at FROM feeds WHERE url = %s;",
+                """
+                SELECT id, url, name, favicon_url, category, description,
+                       enabled, error_count, last_fetched_at, disabled_reason, last_error
+                FROM feeds WHERE url = %s;
+                """,
                 (url,),
             )
             feed_row = cur.fetchone()
@@ -1100,25 +1162,30 @@ def create_feed(conn, url: str, name: str, favicon_url: Optional[str] = None, ca
         return feed
 
 
-def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False) -> List[dict]:
+def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False, include_disabled: bool = False) -> List[dict]:
     """
     Возвращает ленты на которые подписан пользователь.
-    По умолчанию скрытые ленты (hidden=True) не возвращаются.
+    По умолчанию скрытые (hidden=True) и отключённые (enabled=False) ленты не возвращаются.
     include_hidden=True используется на странице настроек.
+    include_disabled=True используется на странице администратора для просмотра мёртвых лент.
     В однопользовательском режиме user_id=None → используем 0.
     """
     if conn is None:
         return []
     _user_id = user_id if user_id is not None else 0
-    # WHERE-клауза: фильтр по hidden должен быть в WHERE, а не после LEFT JOIN
-    # (иначе парсер воспринимает его как продолжение ON-клаузы и хидден ленты
-    # всё равно попадают в результат).
-    hidden_where = "" if include_hidden else "WHERE uf.hidden = FALSE"
+    # WHERE-клауза: фильтры по hidden и enabled должны быть в WHERE, а не после LEFT JOIN
+    # (иначе парсер воспринимает их как продолжение ON-клаузы).
+    conditions = []
+    if not include_hidden:
+        conditions.append("uf.hidden = FALSE")
+    if not include_disabled:
+        conditions.append("f.enabled = TRUE")
+    hidden_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     with conn.cursor() as cur:
         cur.execute(
             f"""
             SELECT f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
-                   f.error_count, f.last_fetched_at, f.last_error,
+                   f.error_count, f.last_fetched_at, f.last_error, f.disabled_reason,
                    uf.folder_id, uf.position, uf.hidden, uf.created_at,
                    COUNT(pa.link) FILTER (
                        WHERE pa.link IS NOT NULL
@@ -1130,7 +1197,7 @@ def list_feeds(conn, user_id: Optional[int] = None, include_hidden: bool = False
             LEFT JOIN article_reads ar ON ar.link = pa.link AND ar.user_id = %s
             {hidden_where}
             GROUP BY f.id, f.url, f.name, f.favicon_url, f.description, f.category, f.enabled,
-                     f.error_count, f.last_fetched_at, f.last_error,
+                     f.error_count, f.last_fetched_at, f.last_error, f.disabled_reason,
                      uf.folder_id, uf.position, uf.hidden, uf.created_at
             ORDER BY uf.position ASC, f.name ASC;
             """,
@@ -1187,21 +1254,70 @@ def delete_feed(conn, feed_id: int, user_id: Optional[int] = None) -> bool:
     """
     Удаляет подписку пользователя на ленту (запись из user_feeds).
     Саму ленту в feeds не трогает — другие пользователи могут быть подписаны.
+
+    После удаления подписки проверяет:
+    - Если подписчиков больше нет И лента рабочая → помечает pending_review (кандидат в каталог)
+    - Если подписчиков больше нет И лента мёртвая/тихая → проставляет disabled_at (будет удалена через 30 дней)
+
     В однопользовательском режиме user_id=None → используем 0.
     Возвращает True если подписка была найдена и удалена.
     """
     if conn is None:
         return False
     _user_id = user_id if user_id is not None else 0
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            DELETE FROM user_feeds
-            WHERE feed_id = %s AND user_id = %s;
-            """,
-            (feed_id, _user_id),
-        )
-        return cur.rowcount > 0
+
+    # Все шаги в одной транзакции — либо всё, либо ничего.
+    # autocommit временно отключается чтобы частичный сбой не оставил ленту в неопределённом состоянии.
+    conn.autocommit = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM user_feeds
+                WHERE feed_id = %s AND user_id = %s;
+                """,
+                (feed_id, _user_id),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False
+
+            # Проверяем остались ли подписчики
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM user_feeds WHERE feed_id = %s;",
+                (feed_id,),
+            )
+            remaining = (cur.fetchone() or {}).get("cnt", 0)
+
+            if remaining == 0:
+                # Нет подписчиков — смотрим состояние ленты
+                cur.execute(
+                    "SELECT enabled, disabled_reason, is_catalog FROM feeds WHERE id = %s;",
+                    (feed_id,),
+                )
+                feed = cur.fetchone()
+                if feed:
+                    if feed["enabled"] and not feed["is_catalog"]:
+                        # Лента рабочая и не каталожная — кандидат на модерацию
+                        cur.execute(
+                            "UPDATE feeds SET pending_review = TRUE WHERE id = %s;",
+                            (feed_id,),
+                        )
+                        logger.info("Лента помечена pending_review (нет подписчиков): feed_id=%s", feed_id)
+                    elif not feed["enabled"] and feed["disabled_reason"] in ("error", "quiet"):
+                        # Лента мёртвая/тихая — проставляем disabled_at если ещё не стоит
+                        cur.execute(
+                            "UPDATE feeds SET disabled_at = COALESCE(disabled_at, NOW()) WHERE id = %s;",
+                            (feed_id,),
+                        )
+
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.autocommit = True
 
 
 def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> Optional[dict]:
@@ -1219,6 +1335,13 @@ def update_feed(conn, feed_id: int, user_id: Optional[int] = None, **kwargs) -> 
 
     with conn.cursor() as cur:
         if feed_updates:
+            # При ручном отключении фиксируем причину и сбрасываем error_count.
+            if feed_updates.get("enabled") is False:
+                feed_updates["error_count"] = 0
+                feed_updates["disabled_reason"] = "manual"
+            # При ручном включении сбрасываем причину отключения.
+            if feed_updates.get("enabled") is True:
+                feed_updates["disabled_reason"] = None
             set_clause = ", ".join(f"{k} = %s" for k in feed_updates)
             cur.execute(
                 f"UPDATE feeds SET {set_clause} WHERE id = %s"
@@ -1274,11 +1397,249 @@ def update_feed_status(conn, url: str, error: Optional[str] = None) -> None:
         else:
             cur.execute(
                 """
-                UPDATE feeds SET error_count = error_count + 1, last_error = %s
+                UPDATE feeds
+                SET error_count = error_count + 1,
+                    last_error = %s,
+                    enabled = CASE
+                        WHEN COALESCE(last_fetched_at, created_at) < NOW() - INTERVAL '48 hours'
+                        THEN FALSE
+                        ELSE enabled
+                    END,
+                    disabled_reason = CASE
+                        WHEN COALESCE(last_fetched_at, created_at) < NOW() - INTERVAL '48 hours'
+                        THEN 'error'
+                        ELSE disabled_reason
+                    END,
+                    disabled_at = CASE
+                        WHEN COALESCE(last_fetched_at, created_at) < NOW() - INTERVAL '48 hours'
+                        AND disabled_at IS NULL
+                        THEN NOW()
+                        ELSE disabled_at
+                    END
                 WHERE url = %s;
                 """,
                 (error, url),
             )
+            # Проверяем, была ли лента автоматически отключена
+            cur.execute(
+                "SELECT enabled FROM feeds WHERE url = %s;",
+                (url,),
+            )
+            row = cur.fetchone()
+            if row and not row["enabled"]:
+                logger.warning(
+                    "Лента автоматически отключена (нет успешного фетча 48ч+): %s", url
+                )
+
+
+def get_dead_feeds_for_recheck(conn) -> list:
+    """Возвращает ленты для ежедневного recheck.
+    Включает 'error' (сломанные) и 'quiet' (тихие) — но не 'manual' (вручную отключённые).
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, url, name, error_count, disabled_reason
+            FROM feeds
+            WHERE enabled = FALSE AND disabled_reason IN ('error', 'quiet');
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def disable_quiet_feeds(conn) -> int:
+    """Отключает ленты у которых нет новых статей 30+ дней.
+
+    Условия отключения для каталожных лент (is_catalog = TRUE):
+    - last_post_at IS NULL или последняя статья > 30 дней назад (из feed_catalog_stats)
+
+    Условия отключения для пользовательских лент (is_catalog = FALSE):
+    - есть подписчики (запись в user_feeds)
+    - лента фетчится 30+ дней (last_fetched_at < NOW() - 30 days) — исключаем новые ленты
+    - нет статей в processed_articles за последние 30 дней
+
+    Подписки пользователей (user_feeds) не удаляются — когда лента оживёт
+    и будет включена обратно, она автоматически вернётся в сайдбар.
+
+    Возвращает количество отключённых лент.
+    """
+    if conn is None:
+        return 0
+    total = 0
+    with conn.cursor() as cur:
+        # Каталожные ленты
+        cur.execute(
+            """
+            UPDATE feeds f
+            SET enabled = FALSE,
+                disabled_reason = 'quiet',
+                disabled_at = NOW(),
+                error_count = 0
+            WHERE f.enabled = TRUE
+              AND f.is_catalog = TRUE
+              AND COALESCE(
+                  (SELECT s.last_post_at FROM feed_catalog_stats s WHERE s.feed_id = f.id),
+                  '-infinity'::timestamptz
+              ) < NOW() - INTERVAL '30 days'
+            RETURNING f.id, f.name;
+            """
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            logger.info("Лента отключена (тихая, каталог, нет статей 30+ дней): %s", row["name"])
+        total += len(rows)
+
+        # Пользовательские ленты
+        cur.execute(
+            """
+            UPDATE feeds f
+            SET enabled = FALSE,
+                disabled_reason = 'quiet',
+                disabled_at = NOW(),
+                error_count = 0
+            WHERE f.enabled = TRUE
+              AND f.is_catalog = FALSE
+              AND EXISTS (SELECT 1 FROM user_feeds uf WHERE uf.feed_id = f.id)
+              AND COALESCE(f.last_fetched_at, f.created_at) < NOW() - INTERVAL '30 days'
+              AND COALESCE(
+                  (SELECT MAX(pa.published_at) FROM processed_articles pa WHERE pa.feed_id = f.id),
+                  '-infinity'::timestamptz
+              ) < NOW() - INTERVAL '30 days'
+            RETURNING f.id, f.name;
+            """
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            logger.info("Лента отключена (тихая, пользовательская, нет статей 30+ дней): %s", row["name"])
+        total += len(rows)
+
+    return total
+
+
+def reenable_feed(conn, feed_id: int) -> None:
+    """Включает ленту обратно после успешной проверки: enabled=TRUE, error_count=0, last_error=NULL, last_fetched_at=NOW()."""
+    if conn is None:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE feeds
+            SET enabled = TRUE,
+                error_count = 0,
+                last_error = NULL,
+                last_fetched_at = NOW(),
+                disabled_reason = NULL,
+                disabled_at = NULL
+            WHERE id = %s;
+            """,
+            (feed_id,),
+        )
+
+
+def cleanup_stale_feeds_and_articles(conn) -> dict:
+    """Удаляет мусорные ленты и статьи из БД.
+
+    Ленты:
+    - disabled_reason IN ('error', 'quiet') и disabled_at > 30 дней назад → удалить
+    - Была каталожной (is_catalog=FALSE, ранее была TRUE), нет подписчиков → удалить
+    При удалении ленты каскадно удаляются user_feeds, feed_catalog_stats.
+    Статьи чистятся отдельно (см. ниже).
+
+    Статьи:
+    - published_at старше 3 месяцев и нет закладок в article_bookmarks → удалить
+    - feed_id IS NULL (лента была удалена) → удалить
+    При удалении статей вручную чистятся: article_reads, article_bookmarks,
+    bertopic_assignments, rag_documents, inbox_articles, last_published_at.
+
+    Возвращает словарь со статистикой удалённого.
+    """
+    if conn is None:
+        return {}
+
+    stats = {
+        "feeds_deleted": 0,
+        "articles_deleted": 0,
+        "reads_deleted": 0,
+        "bertopic_deleted": 0,
+        "rag_deleted": 0,
+        "inbox_deleted": 0,
+        "feed_state_deleted": 0,
+    }
+
+    with conn.cursor() as cur:
+        # ── Ленты: error/quiet 30+ дней ──────────────────────────────────────
+        cur.execute(
+            """
+            DELETE FROM feeds
+            WHERE disabled_reason IN ('error', 'quiet')
+              AND disabled_at IS NOT NULL
+              AND disabled_at < NOW() - INTERVAL '30 days'
+            RETURNING id, name;
+            """
+        )
+        deleted_feeds = cur.fetchall()
+        for row in deleted_feeds:
+            logger.info("Удалена лента (%s, 30+ дней): %s", row.get("disabled_reason", "?"), row["name"])
+        stats["feeds_deleted"] += len(deleted_feeds)
+
+        # ── Собираем ссылки удалённых статей для чистки метаданных ───────────
+        # Оба условия исключают статьи с закладками — не удаляем сохранённое пользователем.
+        cur.execute(
+            """
+            SELECT link FROM processed_articles
+            WHERE NOT EXISTS (
+                SELECT 1 FROM article_bookmarks ab WHERE ab.link = processed_articles.link
+            )
+            AND (
+                published_at < NOW() - INTERVAL '3 months'
+                OR feed_id IS NULL
+            );
+            """
+        )
+        stale_links = [row["link"] for row in cur.fetchall()]
+
+        if stale_links:
+            # Чистим метаданные по ссылкам
+            cur.execute("DELETE FROM article_reads WHERE link = ANY(%s);", (stale_links,))
+            stats["reads_deleted"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM {POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS} WHERE link = ANY(%s);", (stale_links,))
+            stats["bertopic_deleted"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM {POSTGRES_TABLE_RAG_DOCUMENTS} WHERE link = ANY(%s);", (stale_links,))
+            stats["rag_deleted"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM {POSTGRES_TABLE_INBOX_ARTICLES} WHERE link = ANY(%s);", (stale_links,))
+            stats["inbox_deleted"] = cur.rowcount
+
+            # Удаляем сами статьи
+            cur.execute(
+                """
+                DELETE FROM processed_articles
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM article_bookmarks ab WHERE ab.link = processed_articles.link
+                )
+                AND (
+                    published_at < NOW() - INTERVAL '3 months'
+                    OR feed_id IS NULL
+                );
+                """
+            )
+            stats["articles_deleted"] = cur.rowcount
+
+        # ── last_published_at: чистим записи для удалённых лент ──────────────
+        cur.execute(
+            f"""
+            DELETE FROM {POSTGRES_TABLE_FEED_STATE}
+            WHERE source NOT IN (SELECT name FROM feeds);
+            """
+        )
+        stats["feed_state_deleted"] = cur.rowcount
+
+    conn.commit()
+    return stats
 
 
 def get_feeds_as_dict(conn) -> dict:
@@ -1463,7 +1824,25 @@ def import_catalog_feeds(conn) -> int:
         if config_urls:
             cur.execute(
                 """
-                UPDATE feeds SET is_catalog = FALSE
+                UPDATE feeds SET
+                    is_catalog = FALSE,
+                    enabled = CASE
+                        WHEN NOT EXISTS (SELECT 1 FROM user_feeds uf WHERE uf.feed_id = feeds.id)
+                        THEN FALSE
+                        ELSE enabled
+                    END,
+                    disabled_reason = CASE
+                        WHEN NOT EXISTS (SELECT 1 FROM user_feeds uf WHERE uf.feed_id = feeds.id)
+                             AND disabled_reason IS NULL
+                        THEN 'quiet'
+                        ELSE disabled_reason
+                    END,
+                    disabled_at = CASE
+                        WHEN NOT EXISTS (SELECT 1 FROM user_feeds uf WHERE uf.feed_id = feeds.id)
+                             AND disabled_at IS NULL
+                        THEN NOW()
+                        ELSE disabled_at
+                    END
                 WHERE is_catalog = TRUE AND url != ALL(%s::text[]);
                 """,
                 (config_urls,),
@@ -1567,6 +1946,7 @@ def list_catalog_feeds(conn, user_id=None):
                 ON uf.feed_id = f.id
                AND uf.user_id = %s
             WHERE f.is_catalog = TRUE
+              AND f.enabled = TRUE
             ORDER BY f.name;
             """,
             (_user_id,),

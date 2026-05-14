@@ -306,6 +306,7 @@ class FeedItem(BaseModel):
     description: Optional[str] = Field(default=None, description="Описание ленты.")
     category: Optional[str] = Field(default=None, description="Категория ленты.")
     enabled: bool = Field(description="Активна ли лента (участвует ли в сборе).")
+    disabled_reason: Optional[str] = Field(default=None, description="Причина отключения: 'error' | 'quiet' | 'manual' | null.")
     error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
     last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз успешно обновлялась.")
     last_error: Optional[str] = Field(default=None, description="Текст последней ошибки.")
@@ -315,6 +316,12 @@ class FeedItem(BaseModel):
     created_at: Optional[datetime] = Field(default=None, description="Дата подписки пользователя.")
 
     model_config = {"from_attributes": True}
+
+
+class FeedAddResponse(FeedItem):
+    """Ответ на POST /api/feeds — расширяет FeedItem результатом первого фетча."""
+    fetch_status: str = Field(description="Результат первого фетча: 'ok' | 'error' | 'quiet'.")
+    fetch_error: Optional[str] = Field(default=None, description="Текст ошибки (только при fetch_status='error').")
 
 
 class ArticleItem(BaseModel):

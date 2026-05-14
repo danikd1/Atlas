@@ -56,6 +56,7 @@ from .schemas import (
     CollectionArticle,
     CollectionItem,
     FeedBatchCreate,
+    FeedAddResponse,
     FeedCreate,
     FeedItem,
     FeedUpdate,
@@ -986,15 +987,14 @@ def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_cu
     Ничего в БД не пишет.
     """
     import feedparser
+    import httpx
     from urllib.parse import urlparse
     try:
-        import socket
-        _old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(10)
-        try:
-            feed = feedparser.parse(body.url, agent="Mozilla/5.0", request_headers={"Connection": "close"})
-        finally:
-            socket.setdefaulttimeout(_old_timeout)
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+        with httpx.Client(timeout=10, follow_redirects=True, headers=headers) as client:
+            response = client.get(body.url)
+            response.raise_for_status()
+        feed = feedparser.parse(response.text)
         if feed.bozo and not feed.entries:
             return FeedValidateResponse(valid=False, error="Не удалось распознать RSS-ленту")
         name = feed.feed.get("title") or urlparse(body.url).netloc
@@ -1022,68 +1022,117 @@ def validate_feed(body: FeedValidateRequest, current_user: dict = Depends(get_cu
     "/api/feeds",
     tags=["Ленты"],
     summary="Добавить ленту и подписаться",
-    response_model=FeedItem,
+    response_model=FeedAddResponse,
     status_code=201,
 )
 def add_feed(body: FeedCreate, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
-    """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует."""
-    from src.tools.db_state import get_connection, ensure_tables, create_feed, list_feeds, refresh_catalog_stats
+    """Создаёт подписку пользователя на ленту. Если лента с таким URL уже есть — не дублирует.
+
+    Синхронно пробует собрать статьи и возвращает fetch_status:
+    - 'ok'    — статьи получены, лента активна
+    - 'quiet' — лента отвечает, но статей нет; подписка сохранена, лента помечена quiet
+    - 'error' — непредвиденная ошибка; форма закрывается молча
+    """
+    import feedparser as _fp
+    import socket as _socket
+    from src.main import collect_rss
+    from src.tools.db_state import (
+        get_connection, ensure_tables, create_feed,
+        refresh_catalog_stats, POSTGRES_TABLE_FEED_STATE,
+    )
+
     conn = get_connection()
     ensure_tables(conn)
-    feed = create_feed(conn, url=body.url, name=body.name, favicon_url=body.favicon_url, description=body.description, category=body.category, folder_id=body.folder_id, user_id=current_user["id"])
+    feed = create_feed(
+        conn, url=body.url, name=body.name, favicon_url=body.favicon_url,
+        description=body.description, category=body.category,
+        folder_id=body.folder_id, user_id=current_user["id"],
+    )
     if not feed:
         raise HTTPException(status_code=500, detail="Не удалось создать ленту")
 
     feed_id = feed["id"]
+    fetch_status = "ok"
+    fetch_error = None
 
-    # Проверяем — есть ли уже статьи для этой ленты
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS cnt FROM processed_articles WHERE feed_id = %s", (feed_id,))
-        existing_count = (cur.fetchone() or {}).get("cnt", 0)
+    # Валидация при добавлении уже доказала что лента отвечает и парсится —
+    # всегда запускаем сбор, независимо от текущего состояния в БД.
 
-    feeds = list_feeds(conn, user_id=current_user["id"])
-    full_feed = next((f for f in feeds if f["id"] == feed["id"]), feed)
+    # Шаг 1: привязываем существующие статьи по ссылкам из RSS (best-effort).
+    # Нужно при повторной подписке — статьи могли быть под другим feed_id.
+    try:
+        _old_to = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(15)
+        try:
+            _rss = _fp.parse(body.url)
+        finally:
+            _socket.setdefaulttimeout(_old_to)
+        _links = [e.get("link") for e in _rss.entries if e.get("link")]
+        if _links:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE processed_articles SET feed_id = %s"
+                    " WHERE link = ANY(%s) AND (feed_id IS NULL OR feed_id != %s)",
+                    (feed_id, _links, feed_id),
+                )
+                if cur.rowcount:
+                    logger.info("add_feed: привязали %d статей к feed_id=%s", cur.rowcount, feed_id)
+    except Exception:
+        pass  # Привязка — вспомогательный шаг, не блокируем основной путь
+
+    # Шаг 2: если лента была отключена — сбрасываем состояние перед сбором
+    if not feed.get("enabled", True):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE feeds SET enabled=TRUE, error_count=0, last_error=NULL,"
+                " disabled_reason=NULL, disabled_at=NULL WHERE id=%s",
+                (feed_id,),
+            )
+
+    # Шаг 3: собираем статьи и определяем результат
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {POSTGRES_TABLE_FEED_STATE} WHERE source = %s", (body.name,))
+        collect_rss(rss_feeds={body.name: body.url})
+
+        # Проверяем есть ли статьи после сбора
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM processed_articles WHERE feed_id = %s",
+                (feed_id,),
+            )
+            articles_count = (cur.fetchone() or {}).get("cnt", 0)
+
+        if articles_count == 0:
+            # Лента отвечает, но статей нет — помечаем quiet
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE feeds SET enabled=FALSE, disabled_reason='quiet',"
+                    " error_count=0, disabled_at=NOW() WHERE id=%s",
+                    (feed_id,),
+                )
+            fetch_status = "quiet"
+        else:
+            fetch_status = "ok"
+
+    except Exception as e:
+        # Неожиданная ошибка сбора — форма закроется молча, лента останется в БД
+        logger.warning("add_feed: ошибка сбора %s: %s", body.url, e)
+        fetch_status = "error"
+
     background_tasks.add_task(refresh_catalog_stats, conn)
 
-    def _collect_new_feed():
-        """Запускается в фоне только если статей ещё нет (новая/пустая лента)."""
-        try:
-            import feedparser as _fp
-            from src.main import collect_rss
-            from src.tools.db_state import get_connection, POSTGRES_TABLE_FEED_STATE
-            _conn = get_connection()
+    # Собираем данные ленты для ответа
+    feed_data = dict(feed)
+    feed_data.setdefault("folder_id", body.folder_id)
+    feed_data.setdefault("hidden", False)
+    feed_data.setdefault("unread_count", 0)
+    feed_data.setdefault("created_at", None)
+    # Приводим enabled и last_error к актуальному состоянию после всех UPDATE
+    feed_data["enabled"] = fetch_status == "ok"
+    feed_data["last_error"] = fetch_error
 
-            # Привязываем существующие статьи по ссылкам из RSS
-            # (нужно при повторной подписке — статьи могли быть под другим feed_id)
-            import socket as _socket
-            _old_to = _socket.getdefaulttimeout()
-            _socket.setdefaulttimeout(15)
-            try:
-                _rss = _fp.parse(body.url)
-            finally:
-                _socket.setdefaulttimeout(_old_to)
-            _links = [e.get("link") for e in _rss.entries if e.get("link")]
-            if _links:
-                with _conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE processed_articles SET feed_id = %s WHERE link = ANY(%s) AND (feed_id IS NULL OR feed_id != %s)",
-                        (feed_id, _links, feed_id),
-                    )
-                    updated = cur.rowcount
-                    if updated:
-                        logger.info("add_feed: привязали %d статей к feed_id=%s по RSS-ссылкам", updated, feed_id)
-
-            # Если статей нет — собираем из RSS
-            if existing_count == 0:
-                with _conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {POSTGRES_TABLE_FEED_STATE} WHERE source = %s", (body.name,))
-                collect_rss(rss_feeds={body.name: body.url})
-            # Статьи попадут в RAG при следующем запуске text extraction (вручную или по расписанию)
-        except Exception as e:
-            logger.warning("Ошибка при начальном сборе ленты %s: %s", body.url, e)
-
-    background_tasks.add_task(_collect_new_feed)
-    return FeedItem(**full_feed)
+    return FeedAddResponse(**feed_data, fetch_status=fetch_status, fetch_error=fetch_error)
 
 
 @app.post(
@@ -1127,11 +1176,11 @@ def add_feeds_batch(body: FeedBatchCreate, background_tasks: BackgroundTasks, cu
     summary="Список подписок пользователя",
     response_model=list[FeedItem],
 )
-def get_feeds(include_hidden: bool = False, current_user: dict = Depends(get_current_user)):
+def get_feeds(include_hidden: bool = False, include_disabled: bool = False, current_user: dict = Depends(get_current_user)):
     """Возвращает все ленты на которые подписан пользователь. Используется для отрисовки боковой панели."""
     from src.tools.db_state import get_connection, list_feeds
     conn = get_connection()
-    return [FeedItem(**f) for f in list_feeds(conn, user_id=current_user["id"], include_hidden=include_hidden)]
+    return [FeedItem(**f) for f in list_feeds(conn, user_id=current_user["id"], include_hidden=include_hidden, include_disabled=include_disabled)]
 
 
 @app.get(

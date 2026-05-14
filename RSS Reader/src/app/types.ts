@@ -8,6 +8,7 @@ export interface RSSFeed {
   sourceId?: string;         // устарело: группировка теперь по домену URL
   sourceName?: string;       // устарело: группировка теперь по домену URL
   hidden?: boolean;
+  disabled_reason?: string | null;
   unread_count?: number;     // из API: количество непрочитанных статей
   favicon_url?: string;      // из API: иконка сайта
   error_count?: number;      // из API: кол-во подряд идущих ошибок при сборе

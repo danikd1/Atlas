@@ -10,6 +10,7 @@ import { api, ApiArticleItem } from "../lib/api";
 import { authService } from "../lib/authService";
 import atlasLogo from "../assets/atlas-logo2.png";
 import { HandbookModal, shouldShowHandbook } from "./HandbookModal";
+import { Toaster } from "sonner";
 
 export function Root() {
   // ── Auth guard ────────────────────────────────────────────────
@@ -197,6 +198,7 @@ export function Root() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+      <Toaster position="bottom-right" duration={10000} toastOptions={{ style: { background: "#374151", color: "#fff", border: "none" } }} />
       {showProfile && <ProfileModal onClose={() => setShowProfile(false)} />}
       {showHandbook && (
         <HandbookModal

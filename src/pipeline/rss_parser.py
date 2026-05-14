@@ -10,13 +10,12 @@
 import calendar
 import logging
 import re
-import socket
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
-from urllib.error import URLError
 
 import feedparser
+import httpx
 import pandas as pd
 
 from ..tools.db_state import (
@@ -31,6 +30,17 @@ from ..tools.db_state import (
     update_state_with_articles,
 )
 logger = logging.getLogger(__name__)
+
+# XML 1.0 допускает только: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+# Всё остальное — управляющие и суррогатные символы — вызывает bozo-ошибку в feedparser.
+_RE_INVALID_XML = re.compile(
+    '[^\x09\x0A\x0D\x20-퟿-�𐀀-􏿿]'
+)
+
+
+def _clean_xml_content(text: str) -> str:
+    """Удаляет символы недопустимые в XML 1.0 — предотвращает bozo-ошибки feedparser."""
+    return _RE_INVALID_XML.sub('', text)
 
 
 def validate_and_deduplicate_feeds(rss_feeds: Dict[str, str]) -> Dict[str, str]:
@@ -111,7 +121,8 @@ def parse_rss(
     min_published_dt: Optional[datetime] = None,
     max_retries: int = 3,
     retry_delay: int = 2,
-    timeout: int = 30
+    timeout: int = 30,
+    raise_on_network_error: bool = False,
 ) -> List[Dict]:
     """
     Парсит RSS-ленту с обработкой ошибок и retry логикой.
@@ -160,99 +171,112 @@ def parse_rss(
     # Для last_processed_published_at — только строго новее (pub_dt > cutoff), иначе при повторе запуска та же статья попадёт снова
     cutoff_exclusive = min_published_dt is not None
     
-    # Retry логика для сетевых запросов
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            # feedparser не поддерживает timeout напрямую — используем socket.setdefaulttimeout
-            old_timeout = socket.getdefaulttimeout()
-            socket.setdefaulttimeout(timeout)
+    # Retry логика для сетевых запросов.
+    # httpx.Client создаётся один раз на все попытки — переиспользуем соединение.
+    # User-Agent нужен чтобы некоторые серверы (например atlassianblog.wpengine.com)
+    # не блокировали запросы с дефолтным python-httpx идентификатором.
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+    with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:
+        for attempt in range(max_retries):
             try:
-                feed = feedparser.parse(feed_url)
-            finally:
-                socket.setdefaulttimeout(old_timeout)
-            
-            # Проверка на ошибки парсинга
-            if hasattr(feed, 'bozo') and feed.bozo:
-                error_msg = getattr(feed, 'bozo_exception', 'Unknown parsing error')
-                logger.warning(f"Ошибка парсинга RSS {feed_url}: {error_msg}")
-                # Продолжаем работу, если есть entries
+                # Загружаем сырой XML через httpx — получаем контроль над таймаутом и контентом.
+                # Очищаем невалидные XML-символы до парсинга, чтобы избежать bozo-ошибок feedparser.
+                response = client.get(feed_url)
+                response.raise_for_status()
+                raw_content = _clean_xml_content(response.text)
+                feed = feedparser.parse(raw_content)
 
-            # Обработка записей
-            for entry in feed.entries:
-                try:
-                    # Пытаемся достать структурированную дату публикации
-                    pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
-                    
-                    # При фильтрации по last_processed (cutoff_exclusive) без даты не включаем — иначе при повторе запуска все без даты снова попадут в выборку
-                    if cutoff_exclusive and pub_struct is None:
-                        continue
-                    
-                    # Фильтрация по времени
-                    if cutoff_dt is not None and pub_struct is not None:
-                        try:
-                            timestamp = calendar.timegm(pub_struct)
-                            pub_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-                            # cutoff_exclusive (last_processed): только строго новее (pub_dt > cutoff)
-                            # иначе: статьи не старше cutoff (pub_dt >= cutoff)
-                            if cutoff_exclusive:
-                                if pub_dt <= cutoff_dt:
-                                    continue
-                            else:
-                                if pub_dt < cutoff_dt:
-                                    continue
-                        except (ValueError, OSError) as e:
-                            logger.debug(f"Ошибка обработки даты для статьи: {e}")
-                            # Пропускаем статью, если не можем обработать дату
+                # Проверка на остаточные ошибки парсинга (после очистки символов)
+                if hasattr(feed, 'bozo') and feed.bozo:
+                    error_msg = getattr(feed, 'bozo_exception', 'Unknown parsing error')
+                    logger.warning(f"Ошибка парсинга RSS {feed_url}: {error_msg}")
+                    # Продолжаем работу, если есть entries
+
+                # Обработка записей
+                for entry in feed.entries:
+                    try:
+                        # Пытаемся достать структурированную дату публикации
+                        pub_struct = entry.get("published_parsed") or entry.get("updated_parsed")
+
+                        # При фильтрации по last_processed (cutoff_exclusive) без даты не включаем —
+                        # иначе при повторе запуска все без даты снова попадут в выборку
+                        if cutoff_exclusive and pub_struct is None:
                             continue
-                    
-                    # Извлечение данных статьи
-                    title = entry.get("title", "")
-                    link = entry.get("link", "").strip()
-                    published = entry.get("published", "—")
-                    summary = strip_appeared_first_on(entry.get("summary", "Без описания"))
-                    
-                    # Валидация обязательных полей
-                    if not title or not link:
-                        logger.debug(f"Пропущена статья без title или link: {link}")
+
+                        # Фильтрация по времени
+                        if cutoff_dt is not None and pub_struct is not None:
+                            try:
+                                timestamp = calendar.timegm(pub_struct)
+                                pub_dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                                # cutoff_exclusive (last_processed): только строго новее (pub_dt > cutoff)
+                                # иначе: статьи не старше cutoff (pub_dt >= cutoff)
+                                if cutoff_exclusive:
+                                    if pub_dt <= cutoff_dt:
+                                        continue
+                                else:
+                                    if pub_dt < cutoff_dt:
+                                        continue
+                            except (ValueError, OSError) as e:
+                                logger.debug(f"Ошибка обработки даты для статьи: {e}")
+                                continue
+
+                        # Извлечение данных статьи
+                        title = entry.get("title", "")
+                        link = entry.get("link", "").strip()
+                        published = entry.get("published", "—")
+                        summary = strip_appeared_first_on(entry.get("summary", "Без описания"))
+
+                        # Валидация обязательных полей
+                        if not title or not link:
+                            logger.debug(f"Пропущена статья без title или link: {link}")
+                            continue
+
+                        # Базовое представление статьи.
+                        # published_dt используем для хранения нормализованной даты (если удалось распарсить).
+                        article = {
+                            "title": title,
+                            "link": link,
+                            "published": published,
+                            "summary": summary,
+                            "published_dt": pub_dt if "pub_dt" in locals() else None,
+                        }
+                        entries.append(article)
+
+                        # Ограничение по количеству
+                        if limit is not None and len(entries) >= limit:
+                            break
+
+                    except Exception as e:
+                        logger.debug(f"Ошибка обработки записи из RSS: {e}")
                         continue
-                    
-                    # Базовое представление статьи.
-                    # published_dt используем для хранения нормализованной даты (если удалось распарсить).
-                    article = {
-                        "title": title,
-                        "link": link,
-                        "published": published,
-                        "summary": summary,
-                        "published_dt": pub_dt if "pub_dt" in locals() else None,
-                    }
-                    entries.append(article)
-                    
-                    # Ограничение по количеству
-                    if limit is not None and len(entries) >= limit:
-                        break
-                
-                except Exception as e:
-                    logger.debug(f"Ошибка обработки записи из RSS: {e}")
-                    continue
-            
-            # Успешно распарсили
-            return entries
-            
-        except (URLError, socket.timeout, socket.gaierror, ConnectionError) as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                logger.warning(
-                    f"Ошибка сети при парсинге {feed_url} (попытка {attempt + 1}/{max_retries}): {e}. "
-                    f"Повтор через {retry_delay} сек..."
-                )
-                time.sleep(retry_delay)
-            else:
-                logger.error(f"Не удалось распарсить {feed_url} после {max_retries} попыток: {e}")
-        except Exception as e:
-            # Неожиданные ошибки не ретраим
-            logger.error(f"Неожиданная ошибка при парсинге {feed_url}: {e}")
-            break
+
+                # Успешно распарсили
+                return entries
+
+            except httpx.HTTPStatusError as e:
+                # 4xx — ошибка клиента (404, 403 и т.п.), ретрай бессмысленен
+                logger.error(f"HTTP {e.response.status_code} при парсинге {feed_url}: {e}")
+                if raise_on_network_error:
+                    raise
+                break
+            except (ConnectionError, httpx.TimeoutException, httpx.ConnectError) as e:
+                # Сетевые сбои — ретраим
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Ошибка сети при парсинге {feed_url} (попытка {attempt + 1}/{max_retries}): {e}. "
+                        f"Повтор через {retry_delay} сек..."
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    logger.error(f"Не удалось распарсить {feed_url} после {max_retries} попыток: {e}")
+                    if raise_on_network_error:
+                        raise
+            except Exception as e:
+                # Неожиданные ошибки не ретраим
+                logger.error(f"Неожиданная ошибка при парсинге {feed_url}: {e}")
+                if raise_on_network_error:
+                    raise
+                break
 
     return entries
 
@@ -345,7 +369,8 @@ def collect_articles_for_window(
                 hours_back=hours_back,
                 min_published_dt=min_published_dt,
                 max_retries=max_retries,
-                retry_delay=retry_delay
+                retry_delay=retry_delay,
+                raise_on_network_error=True,
             )
 
             for art in articles:
