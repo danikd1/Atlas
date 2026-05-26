@@ -78,6 +78,36 @@ def get_connection():
         return None
 
 
+def log_feed_event(
+    conn,
+    event: str,
+    *,
+    feed_id: Optional[int] = None,
+    feed_name: str = "",
+    feed_url: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> None:
+    """Записывает событие Feed Health в feed_events.
+
+    event: disabled_error | disabled_quiet | reenabled | pending_review | deleted | articles_cleaned
+
+    Никогда не бросает исключений — мониторинг не должен ломать основную логику.
+    """
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO feed_events (feed_id, feed_name, feed_url, event, detail)
+                VALUES (%s, %s, %s, %s, %s);
+                """,
+                (feed_id, feed_name or "", feed_url, event, detail),
+            )
+    except Exception as e:
+        logger.warning("log_feed_event: не удалось записать событие %s: %s", event, e)
+
+
 def ensure_tables(conn) -> None:
     """
     Создает необходимые таблицы, если их еще нет.
@@ -526,6 +556,31 @@ def ensure_tables(conn) -> None:
             );
             """
         )
+
+        # Таблица событий Feed Health — лог изменений состояния лент.
+        # Заполняется автоматически при отключении, включении, удалении лент и очистке статей.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_events (
+                id         SERIAL PRIMARY KEY,
+                feed_id    INT,
+                feed_name  TEXT NOT NULL,
+                feed_url   TEXT,
+                event      TEXT NOT NULL,
+                detail     TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        try:
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_feed_events_created_at
+                ON feed_events (created_at DESC);
+                """
+            )
+        except Exception:
+            pass
 
         # МП.4: изоляция BERTopic по пользователю.
         # collections уже имеет user_id TEXT (RAG-слой) — используем отдельное имя owner_id.
@@ -1300,9 +1355,18 @@ def delete_feed(conn, feed_id: int, user_id: Optional[int] = None) -> bool:
                     if feed["enabled"] and not feed["is_catalog"]:
                         # Лента рабочая и не каталожная — кандидат на модерацию
                         cur.execute(
-                            "UPDATE feeds SET pending_review = TRUE WHERE id = %s;",
+                            """
+                            UPDATE feeds SET pending_review = TRUE WHERE id = %s
+                            RETURNING name, url;
+                            """,
                             (feed_id,),
                         )
+                        feed_row = cur.fetchone()
+                        feed_name = feed_row["name"] if feed_row else str(feed_id)
+                        feed_url = feed_row["url"] if feed_row else None
+                        log_feed_event(conn, "pending_review",
+                                       feed_id=feed_id, feed_name=feed_name, feed_url=feed_url,
+                                       detail="нет подписчиков, лента рабочая")
                         logger.info("Лента помечена pending_review (нет подписчиков): feed_id=%s", feed_id)
                     elif not feed["enabled"] and feed["disabled_reason"] in ("error", "quiet"):
                         # Лента мёртвая/тихая — проставляем disabled_at если ещё не стоит
@@ -1395,8 +1459,10 @@ def update_feed_status(conn, url: str, error: Optional[str] = None) -> None:
                 (url,),
             )
         else:
+            # CTE `old` фиксирует enabled до UPDATE — чтобы отловить именно момент перехода.
             cur.execute(
                 """
+                WITH old AS (SELECT id, name, url, enabled FROM feeds WHERE url = %s)
                 UPDATE feeds
                 SET error_count = error_count + 1,
                     last_error = %s,
@@ -1416,17 +1482,19 @@ def update_feed_status(conn, url: str, error: Optional[str] = None) -> None:
                         THEN NOW()
                         ELSE disabled_at
                     END
-                WHERE url = %s;
+                WHERE url = %s
+                RETURNING feeds.id, feeds.name, feeds.url, feeds.enabled,
+                          (SELECT old.enabled FROM old) AS was_enabled;
                 """,
-                (error, url),
-            )
-            # Проверяем, была ли лента автоматически отключена
-            cur.execute(
-                "SELECT enabled FROM feeds WHERE url = %s;",
-                (url,),
+                (url, error, url),
             )
             row = cur.fetchone()
-            if row and not row["enabled"]:
+            if row and not row["enabled"] and row["was_enabled"]:
+                log_feed_event(
+                    conn, "disabled_error",
+                    feed_id=row["id"], feed_name=row["name"], feed_url=row["url"],
+                    detail=(error[:500] if error else None),
+                )
                 logger.warning(
                     "Лента автоматически отключена (нет успешного фетча 48ч+): %s", url
                 )
@@ -1483,12 +1551,15 @@ def disable_quiet_feeds(conn) -> int:
                   (SELECT s.last_post_at FROM feed_catalog_stats s WHERE s.feed_id = f.id),
                   '-infinity'::timestamptz
               ) < NOW() - INTERVAL '30 days'
-            RETURNING f.id, f.name;
+            RETURNING f.id, f.name, f.url;
             """
         )
         rows = cur.fetchall()
         for row in rows:
             logger.info("Лента отключена (тихая, каталог, нет статей 30+ дней): %s", row["name"])
+            log_feed_event(conn, "disabled_quiet",
+                           feed_id=row["id"], feed_name=row["name"], feed_url=row["url"],
+                           detail="каталог: нет статей 30+ дней")
         total += len(rows)
 
         # Пользовательские ленты
@@ -1507,12 +1578,15 @@ def disable_quiet_feeds(conn) -> int:
                   (SELECT MAX(pa.published_at) FROM processed_articles pa WHERE pa.feed_id = f.id),
                   '-infinity'::timestamptz
               ) < NOW() - INTERVAL '30 days'
-            RETURNING f.id, f.name;
+            RETURNING f.id, f.name, f.url;
             """
         )
         rows = cur.fetchall()
         for row in rows:
             logger.info("Лента отключена (тихая, пользовательская, нет статей 30+ дней): %s", row["name"])
+            log_feed_event(conn, "disabled_quiet",
+                           feed_id=row["id"], feed_name=row["name"], feed_url=row["url"],
+                           detail="пользовательская: нет статей 30+ дней")
         total += len(rows)
 
     return total
@@ -1576,12 +1650,15 @@ def cleanup_stale_feeds_and_articles(conn) -> dict:
             WHERE disabled_reason IN ('error', 'quiet')
               AND disabled_at IS NOT NULL
               AND disabled_at < NOW() - INTERVAL '30 days'
-            RETURNING id, name;
+            RETURNING id, name, url, disabled_reason;
             """
         )
         deleted_feeds = cur.fetchall()
         for row in deleted_feeds:
             logger.info("Удалена лента (%s, 30+ дней): %s", row.get("disabled_reason", "?"), row["name"])
+            log_feed_event(conn, "deleted",
+                           feed_id=row["id"], feed_name=row["name"], feed_url=row["url"],
+                           detail=f"disabled_reason={row['disabled_reason']}, 30+ дней без восстановления")
         stats["feeds_deleted"] += len(deleted_feeds)
 
         # ── Собираем ссылки удалённых статей для чистки метаданных ───────────
@@ -1637,6 +1714,20 @@ def cleanup_stale_feeds_and_articles(conn) -> dict:
             """
         )
         stats["feed_state_deleted"] = cur.rowcount
+
+        # ── Событие очистки статей (агрегат) ──────────────────────────────────
+        if stats["articles_deleted"] > 0:
+            log_feed_event(
+                conn, "articles_cleaned",
+                feed_name="—",
+                detail=(
+                    f"статей={stats['articles_deleted']}, "
+                    f"reads={stats['reads_deleted']}, "
+                    f"bertopic={stats['bertopic_deleted']}, "
+                    f"rag={stats['rag_deleted']}, "
+                    f"inbox={stats['inbox_deleted']}"
+                ),
+            )
 
     conn.commit()
     return stats
@@ -3026,6 +3117,43 @@ def get_rag_coverage_for_collection(conn, rag_collection_id: int, collection_id:
     if row:
         return {"total": int(row["total"]), "indexed": int(row["indexed"])}
     return {"total": 0, "indexed": 0}
+
+
+# ─────────────────────────────────────────────────────────────
+#  Feed Events — мониторинг Feed Health
+# ─────────────────────────────────────────────────────────────
+
+def list_feed_events(conn, limit: int = 100, event: Optional[str] = None) -> List[dict]:
+    """Возвращает последние события Feed Health из feed_events.
+
+    event — фильтр по типу события (disabled_error, disabled_quiet, reenabled,
+            pending_review, deleted, articles_cleaned). None — все события.
+    """
+    if conn is None:
+        return []
+    with conn.cursor() as cur:
+        if event:
+            cur.execute(
+                """
+                SELECT id, feed_id, feed_name, feed_url, event, detail, created_at
+                FROM feed_events
+                WHERE event = %s
+                ORDER BY created_at DESC
+                LIMIT %s;
+                """,
+                (event, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, feed_id, feed_name, feed_url, event, detail, created_at
+                FROM feed_events
+                ORDER BY created_at DESC
+                LIMIT %s;
+                """,
+                (limit,),
+            )
+        return [dict(row) for row in cur.fetchall()]
 
 
 def get_rag_coverage_for_feeds(conn, rag_collection_id: int, feed_ids: list, user_id: int) -> dict:

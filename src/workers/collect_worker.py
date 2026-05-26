@@ -123,7 +123,7 @@ def _do_recheck_dead_feeds() -> None:
     from src.pipeline.rss_parser import parse_rss
     from src.tools.db_state import (
         get_connection, get_dead_feeds_for_recheck, reenable_feed,
-        disable_quiet_feeds, cleanup_stale_feeds_and_articles,
+        disable_quiet_feeds, cleanup_stale_feeds_and_articles, log_feed_event,
     )
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -165,6 +165,9 @@ def _do_recheck_dead_feeds() -> None:
                         parse_rss(url, limit=1, max_retries=1, raise_on_network_error=True)
 
                     reenable_feed(conn, feed_id)
+                    log_feed_event(conn, "reenabled",
+                                   feed_id=feed_id, feed_name=name, feed_url=url,
+                                   detail=f"was: {reason}")
                     reenabled += 1
                     logger.info("✅ Ожила (%s → active): %s", reason, name)
                 except Exception as e:
