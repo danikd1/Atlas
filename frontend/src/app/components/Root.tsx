@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation, useNavigate, Navigate } from "react-router";
-import { Rss, Home, Search, X, Map, LogOut, User, Play, Pause, Database, GraduationCap } from "lucide-react";
+import { Rss, Home, Search, X, Map, LogOut, User, Play, Pause, Database, GraduationCap, MessageSquare } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { ArticlesSidebar } from "./ArticlesSidebar";
 import { ProfileModal } from "./ProfileModal";
@@ -250,6 +250,15 @@ export function Root() {
               <Map className="w-4 h-4" />
               Карта
             </Link>
+            <Link
+              to="/chat"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                location.pathname === "/chat" ? "bg-blue-100 text-blue-700" : "text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              Чат
+            </Link>
           </nav>
 
           {/* Search — flex-1, оригинальное положение по центру */}
@@ -466,8 +475,8 @@ export function Root() {
         )}
 
         <main
-          className="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-8"
-          onClick={() => selectedSource && setSelectedSource(null)}
+          className={`flex-1 ${location.pathname === "/chat" ? "overflow-hidden" : "overflow-y-auto px-4 sm:px-6 lg:px-8 py-8"}`}
+          onClick={() => location.pathname !== "/chat" && selectedSource && setSelectedSource(null)}
         >
           <Outlet context={ctx} />
         </main>

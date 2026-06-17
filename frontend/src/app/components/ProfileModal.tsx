@@ -31,6 +31,7 @@ export function ProfileModal({ onClose }: ProfileModalProps) {
   const [credentials, setCredentials] = useState("");
   const [model, setModel] = useState("GigaChat");
   const [hasSaved, setHasSaved] = useState(false);
+  const [isEditingCreds, setIsEditingCreds] = useState(false);
   const [testStatus, setTestStatus] = useState<"idle" | "loading" | "ok" | "error">("idle");
   const [testError, setTestError] = useState<string | null>(null);
 
@@ -52,8 +53,9 @@ export function ProfileModal({ onClose }: ProfileModalProps) {
     const savedCredentials = localStorage.getItem("gigachat_credentials");
     const savedModel = localStorage.getItem("gigachat_model");
     if (savedCredentials) {
-      setCredentials(savedCredentials);
       setHasSaved(true);
+      // Не грузим значение в state сразу — показываем статический блок.
+      // Значение загружается только когда пользователь явно нажимает «Изменить».
     }
     if (savedModel) setModel(savedModel);
   }, []);
@@ -70,6 +72,8 @@ export function ProfileModal({ onClose }: ProfileModalProps) {
         localStorage.setItem("gigachat_credentials", credentials.trim());
         localStorage.setItem("gigachat_model", model);
         setHasSaved(true);
+        setIsEditingCreds(false);
+        setCredentials("");
       } else {
         setTestStatus("error");
         setTestError(result.error ?? "Неизвестная ошибка");
@@ -139,24 +143,40 @@ export function ProfileModal({ onClose }: ProfileModalProps) {
 
             <div className="mb-4">
               <label className="block text-xs text-gray-500 mb-1.5">API-ключ</label>
-              {hasSaved && !credentials ? (
+              {hasSaved && !isEditingCreds ? (
                 <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
                   <span className="text-sm text-gray-500">●●●●●●●● (сохранено)</span>
                   <button
-                    onClick={() => setCredentials(localStorage.getItem("gigachat_credentials") ?? "")}
-                    className="text-xs text-blue-600 hover:underline ml-2"
+                    onClick={() => {
+                      setIsEditingCreds(true);
+                      setCredentials(localStorage.getItem("gigachat_credentials") ?? "");
+                      setTestStatus("idle");
+                    }}
+                    className="text-xs text-blue-600 hover:underline ml-2 flex-shrink-0"
                   >
                     Изменить
                   </button>
                 </div>
               ) : (
-                <input
-                  type="password"
-                  value={credentials}
-                  onChange={(e) => { setCredentials(e.target.value); setTestStatus("idle"); }}
-                  placeholder="Вставьте ваш API-ключ"
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                <div className="space-y-1.5">
+                  <input
+                    type="password"
+                    value={credentials}
+                    onChange={(e) => { setCredentials(e.target.value); setTestStatus("idle"); }}
+                    placeholder="Вставьте ваш API-ключ"
+                    autoFocus={isEditingCreds}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  {hasSaved && isEditingCreds && (
+                    <button
+                      type="button"
+                      onClick={() => { setIsEditingCreds(false); setCredentials(""); setTestStatus("idle"); }}
+                      className="text-xs text-gray-400 hover:text-gray-600"
+                    >
+                      Отмена
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 

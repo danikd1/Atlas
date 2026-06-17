@@ -1,140 +1,15 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Сбор и анализ статей</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css" />
-</head>
-<body>
-  <div class="layout">
-    <header class="header">
-      <div class="header__row">
-        <a href="#/" class="header__logo">Сбор и анализ статей</a>
-        <nav class="nav">
-          <a href="#/" class="nav__link nav__link--home">Главная</a>
-        </nav>
-      </div>
-      <p class="header__subtitle header__subtitle--page1">Запуск пайплайна и таксономия → появятся коллекции</p>
-      <p class="header__subtitle header__subtitle--page2" hidden>Коллекция: список статей и Q&A по ней</p>
-    </header>
 
-    <!-- Страница 1: Запуск пайплайна + таксономия → коллекции -->
-    <main id="page-home" class="main main--page">
-      <section class="card">
-        <h1 class="card__title">Запуск пайплайна</h1>
-        <p class="card__desc">Подберите тему по запросу (таксономия D/GA/A) или оставьте по умолчанию. Запустите пайплайн — в списке ниже появится новая коллекция.</p>
-        <div class="form-group">
-          <label for="router-query" class="label">Подбор таксономии по запросу</label>
-          <div class="form-row">
-            <input type="text" id="router-query" class="input input--wide" placeholder="Например: тестирование и качество ПО" autocomplete="off" />
-            <button type="button" id="router-submit" class="btn btn--secondary">Подобрать</button>
-          </div>
-          <div id="router-result" class="result-box" aria-live="polite" hidden></div>
-        </div>
-        <div class="form-group">
-          <label for="pipeline-collection-name" class="label">Имя коллекции (необязательно)</label>
-          <div class="form-row">
-            <input type="text" id="pipeline-collection-name" class="input input--wide" placeholder="Оставьте пустым для имени по умолчанию" autocomplete="off" />
-            <button type="button" id="pipeline-run" class="btn btn--primary">Запустить пайплайн</button>
-          </div>
-        </div>
-        <div id="pipeline-result" class="result-box" aria-live="polite" hidden></div>
-      </section>
+  <!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>RSS Reader</title>
+    </head>
 
-      <section class="card">
-        <div class="card__header">
-          <h2 class="card__title">Мои ленты</h2>
-          <button type="button" id="feed-add-btn" class="btn btn--secondary btn--sm">+ Добавить по URL</button>
-        </div>
-        <div id="feeds-list" class="feeds-list" aria-live="polite">
-          <p class="feeds-empty">Нет подписок. Добавьте ленту по URL.</p>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="card__title">Коллекции</h2>
-        <p class="card__desc">После запуска пайплайна здесь появятся коллекции. Откройте коллекцию — увидите список статей и Q&A по ним.</p>
-        <button type="button" id="collections-refresh" class="btn btn--secondary">Обновить список</button>
-        <div id="collections-list" class="collections-list" aria-live="polite"></div>
-      </section>
-    </main>
-
-    <!-- Страница 2: Открытие коллекции → список статей + Q&A -->
-    <main id="page-collection" class="main main--page" hidden>
-      <div class="collection-header">
-        <a href="#/" class="back-link">← К коллекциям</a>
-        <h1 id="collection-title" class="collection-title">Коллекция</h1>
-        <p id="collection-meta" class="collection-meta"></p>
-        <p id="collection-description" class="collection-description" hidden></p>
-      </div>
-
-      <section class="card">
-        <h2 class="card__title">Статьи в коллекции</h2>
-        <p class="card__desc">Список статей (RAG-корпус этой коллекции). Q&A-ассистент отвечает только по этим статьям.</p>
-        <div id="articles-list" class="articles-list" aria-live="polite"></div>
-      </section>
-
-      <section class="card card--digest">
-        <h2 class="card__title">Дайджест</h2>
-        <p class="card__desc">Сформировать дайджест по разделам: ключевые тренды, методы и подходы, инструменты, кейсы.</p>
-        <div class="digest-period">
-          <div class="form-group form-group--inline">
-            <label for="digest-from" class="label">С</label>
-            <input type="date" id="digest-from" class="input input--date" />
-          </div>
-          <div class="form-group form-group--inline">
-            <label for="digest-to" class="label">По</label>
-            <input type="date" id="digest-to" class="input input--date" />
-          </div>
-          <button type="button" id="digest-clear-dates" class="btn btn--ghost btn--sm">Сбросить</button>
-        </div>
-        <button type="button" id="digest-build" class="btn btn--primary">Создать дайджест</button>
-        <div id="digest-result" class="digest-result" aria-live="polite" hidden></div>
-      </section>
-
-      <section class="card card--qa">
-        <h2 class="card__title">Q&A по этой коллекции</h2>
-        <p class="card__desc">Задайте вопрос — ответ будет сформирован только по статьям выбранной коллекции (один RAG-корпус на коллекцию).</p>
-        <div class="form-row">
-          <input type="text" id="qa-question" class="input input--wide" placeholder="Ваш вопрос" autocomplete="off" />
-          <button type="button" id="qa-submit" class="btn btn--primary">Спросить</button>
-        </div>
-        <div id="qa-result" class="result-box qa-result" aria-live="polite" hidden></div>
-      </section>
-    </main>
-
-    <footer class="footer">
-      <p>API: <a href="/api/health" target="_blank" rel="noopener">/api/health</a></p>
-    </footer>
-  </div>
-
-  <!-- Модальное окно: добавить ленту по URL -->
-  <div id="modal-add-feed" class="modal-overlay" hidden aria-modal="true" role="dialog">
-    <div class="modal-add-feed">
-      <h2 class="modal__title">Добавить ленту по URL</h2>
-      <div class="form-group">
-        <label for="feed-url-input" class="label">URL RSS-ленты</label>
-        <div class="form-row">
-          <input type="url" id="feed-url-input" class="input input--wide" placeholder="https://habr.com/ru/rss/hubs/python/articles/" autocomplete="off" />
-          <button type="button" id="feed-validate-btn" class="btn btn--secondary">Проверить</button>
-        </div>
-        <p id="feed-url-error" class="field-error" hidden></p>
-      </div>
-      <div id="feed-preview" class="feed-preview" hidden>
-        <img id="feed-preview-favicon" class="feed-preview__favicon" src="" alt="" width="20" height="20" />
-        <input type="text" id="feed-name-input" class="input input--wide" placeholder="Название ленты" />
-      </div>
-      <div class="modal__actions">
-        <button type="button" id="feed-cancel-btn" class="btn btn--ghost">Отмена</button>
-        <button type="button" id="feed-submit-btn" class="btn btn--primary" disabled>Добавить</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="/static/app.js"></script>
-</body>
-</html>
+    <body>
+      <div id="root"></div>
+      <script type="module" src="/src/main.tsx"></script>
+    </body>
+  </html>
+  

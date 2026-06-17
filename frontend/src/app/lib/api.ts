@@ -708,4 +708,29 @@ export const api = {
       throw new Error(data.detail ?? "Не удалось сменить пароль");
     }
   },
+
+  async sendChatMessage(
+    message: string,
+    apiMessages: Record<string, unknown>[]
+  ): Promise<{
+    answer: string;
+    sources: { title: string; link: string; published_at: string; snippet?: string }[];
+    messages: Record<string, unknown>[];
+  }> {
+    const params = gigachatParams();
+    if (!params.gigachat_credentials) throw new Error("GigaChat credentials не настроены. Откройте Профиль и укажите ключ.");
+    const res = await fetch(`${API_BASE}/api/chat/message`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ message, messages: apiMessages, ...params }),
+    });
+    handleUnauthorized(res);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const detail = data.detail ?? "Ошибка чата. Попробуйте снова.";
+      // 403 = GigaChat credentials error (not our JWT) — show as user-facing message
+      throw new Error(detail);
+    }
+    return res.json();
+  },
 };

@@ -30,9 +30,6 @@ bertopic_output_2/
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
-
 # Node
 node_modules/
 dist/
@@ -41,4 +38,6 @@ dist/
 *.log
 
 # Frontend build output
-frontend_dist/
+docs/
+frontend/README-HANDOFF.md
+frontend/guidelines/

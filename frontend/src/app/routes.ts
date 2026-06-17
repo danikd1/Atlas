@@ -9,6 +9,7 @@ import { TopicMapPage } from "./components/TopicMapPage";
 import { LoginPage } from "./components/LoginPage";
 import { RegisterPage } from "./components/RegisterPage";
 import { ForgotPasswordPage } from "./components/ForgotPasswordPage";
+import { ChatPage } from "./components/ChatPage";
 
 export const router = createBrowserRouter([
   { path: "login", Component: LoginPage },
@@ -21,6 +22,7 @@ export const router = createBrowserRouter([
       { index: true, Component: HomePage },
       { path: "feeds", Component: FeedsPage },
       { path: "map", Component: TopicMapPage },
+      { path: "chat", Component: ChatPage },
       { path: "article/:id", Component: ArticleDetailPage },
       { path: "source/:feedUrl", Component: SourceFeedsPage },
       { path: "source-hub/:feedUrl", Component: SourceHubPage },
