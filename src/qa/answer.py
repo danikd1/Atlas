@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from config.config import DEFAULT_LLM_SLEEP
-from src.qa.retrieval import RetrievedChunk, embed_query, retrieve_chunks
+from src.qa.retrieval import RetrievedChunk, embed_query, hybrid_retrieve_chunks, retrieve_chunks
 from src.qa.rerank import RerankedChunk, rerank_chunks
 from src.tools.db_state import get_connection
 from src.tools.llm_utils import clean_text_for_llm, create_gigachat_client
@@ -21,11 +21,12 @@ from src.tools.llm_utils import clean_text_for_llm, create_gigachat_client
 
 @dataclass
 class AnswerOptions:
-    top_k_retrieval: int = 40
+    top_k_retrieval: int = 40   # для pure-vector fallback; при use_hybrid=True используется 250
     top_k_rerank: int = 10
     from_date: Optional[datetime] = None
     to_date: Optional[datetime] = None
     language: str = "ru"  # "ru" | "en"
+    use_hybrid: bool = True  # вектор + BM25 + RRF вместо pure-vector retrieval
 
 
 @dataclass
@@ -143,6 +144,8 @@ def answer_question(
     query: str,
     collection_id: int,
     options: Optional[AnswerOptions] = None,
+    gigachat_credentials: Optional[str] = None,
+    gigachat_model: Optional[str] = None,
 ) -> AnswerResult:
     """
     Высокоуровневая функция QA-ассистента:
@@ -168,14 +171,25 @@ def answer_question(
 
     # Эмбеддинг запроса + retrieval
     model, q_emb = embed_query(query)
-    retrieved = retrieve_chunks(
-        conn,
-        q_emb,
-        collection_id=collection_id,
-        top_k=options.top_k_retrieval,
-        date_from=options.from_date,
-        date_to=options.to_date,
-    )
+    if options.use_hybrid:
+        retrieved = hybrid_retrieve_chunks(
+            conn,
+            query,
+            q_emb,
+            collection_id=collection_id,
+            top_k=250,
+            date_from=options.from_date,
+            date_to=options.to_date,
+        )
+    else:
+        retrieved = retrieve_chunks(
+            conn,
+            q_emb,
+            collection_id=collection_id,
+            top_k=options.top_k_retrieval,
+            date_from=options.from_date,
+            date_to=options.to_date,
+        )
     if not retrieved:
         return AnswerResult(
             answer="В этой коллекции не удалось найти релевантные фрагменты статей для ответа на вопрос.",
@@ -227,7 +241,10 @@ def answer_question(
         language=options.language,
     )
 
-    client = create_gigachat_client()
+    client = create_gigachat_client(
+        credentials=gigachat_credentials or None,
+        model=gigachat_model or None,
+    )
     try:
         result = client.chat({"messages": messages, "temperature": 0.1})
         answer_text = (result.choices[0].message.content or "").strip()

@@ -543,6 +543,21 @@ class BertopicTopicsResponse(BaseModel):
     total: int
 
 
+# ── Chat agent ────────────────────────────────────────────────────────────
+
+class ChatMessageRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="Новое сообщение пользователя.")
+    messages: List[Dict[str, Any]] = Field(default_factory=list, description="История диалога (без системного промпта).")
+    gigachat_credentials: str = Field(..., description="GigaChat API-ключ.")
+    gigachat_model: str = Field(default="GigaChat-Pro", description="Модель GigaChat.")
+
+
+class ChatMessageResponse(BaseModel):
+    answer: str = Field(description="Финальный ответ агента.")
+    sources: List[Dict[str, Any]] = Field(default_factory=list, description="Список источников: {title, link, published_at}.")
+    messages: List[Dict[str, Any]] = Field(description="Обновлённая история диалога (включая ответ агента).")
+
+
 # ── GigaChat credentials test ──────────────────────────────────────────────
 
 class GigaChatTestRequest(BaseModel):

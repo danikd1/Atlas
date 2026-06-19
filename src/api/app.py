@@ -84,6 +84,8 @@ from .schemas import (
     BertopicTopicsResponse,
     UserInfo,
     ChangePasswordRequest,
+    ChatMessageRequest,
+    ChatMessageResponse,
     GigaChatTestRequest,
     GigaChatTestResponse,
 )
@@ -699,6 +701,32 @@ def get_digest(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── GigaChat error parser ────────────────────────────────────────────────────
+
+def _gigachat_friendly_error(err: str) -> str:
+    """
+    Переводит сырое исключение GigaChat SDK в понятное пользователю сообщение.
+    SDK бросает исключения вида: "402 ... Payment Required" или "HTTPError(401, ...)"
+    — мы парсим только HTTP-статус и возвращаем короткий текст.
+    """
+    e = err.lower()
+    if "402" in e or "payment required" in e:
+        return "Недостаточно средств или истёк лимит GigaChat. Проверьте подписку на сайте Sber."
+    if "401" in e or "unauthorized" in e:
+        return "Неверный API-ключ GigaChat. Проверьте ключ в Профиле."
+    if "403" in e or "forbidden" in e:
+        return "Доступ запрещён. Проверьте права API-ключа GigaChat."
+    if "429" in e or "too many requests" in e or "rate limit" in e:
+        return "Превышен лимит запросов GigaChat. Подождите немного и попробуйте снова."
+    if "503" in e or "service unavailable" in e or "timed out" in e or "timeout" in e:
+        return "GigaChat временно недоступен. Попробуйте через несколько минут."
+    if "500" in e or "internal server error" in e:
+        return "Внутренняя ошибка сервера GigaChat. Попробуйте позже."
+    if "connection" in e or "connect" in e or "network" in e:
+        return "Нет связи с GigaChat. Проверьте интернет-соединение."
+    return "Не удалось выполнить запрос к GigaChat. Попробуйте позже."
+
+
 # ─── GigaChat credentials test ────────────────────────────────────────────────
 
 @app.post(
@@ -715,7 +743,51 @@ def test_gigachat(body: GigaChatTestRequest, current_user: dict = Depends(get_cu
         client.chat({"messages": [{"role": "user", "content": "Привет"}], "max_tokens": 5})
         return GigaChatTestResponse(ok=True)
     except Exception as e:
-        return GigaChatTestResponse(ok=False, error=str(e))
+        return GigaChatTestResponse(ok=False, error=_gigachat_friendly_error(str(e)))
+
+
+# ─── Chat agent ───────────────────────────────────────────────────────────────
+
+@app.post(
+    "/api/chat/message",
+    tags=["Chat"],
+    summary="Отправить сообщение чат-агенту",
+    response_model=ChatMessageResponse,
+)
+def chat_message(body: ChatMessageRequest, current_user: dict = Depends(get_current_user)):
+    """
+    Запускает ReAct-цикл агента и возвращает финальный ответ.
+
+    - `message` — новое сообщение пользователя
+    - `messages` — история диалога (предыдущие turns)
+    - Ответ содержит: `answer`, `sources`, `messages` (обновлённая история для следующего запроса)
+    """
+    if not body.gigachat_credentials.strip():
+        raise HTTPException(status_code=400, detail="gigachat_credentials не может быть пустым")
+
+    messages = list(body.messages) + [{"role": "user", "content": body.message}]
+
+    try:
+        from src.chat.agent import run_chat_agent
+        events = list(run_chat_agent(messages, body.gigachat_credentials, body.gigachat_model))
+    except Exception as e:
+        err = str(e)
+        logger.exception("Chat agent error: %s", e)
+        friendly = _gigachat_friendly_error(err)
+        # 401/credentials → 403 чтобы фронтенд не разлогинил пользователя
+        if "401" in err or "unauthorized" in err.lower() or "credentials" in err.lower():
+            raise HTTPException(status_code=403, detail=friendly)
+        raise HTTPException(status_code=500, detail=friendly)
+
+    done = next((e for e in events if e.get("type") == "done"), None)
+    if done is None:
+        raise HTTPException(status_code=500, detail="Агент завершился без финального ответа")
+
+    return ChatMessageResponse(
+        answer=done.get("answer") or "",
+        sources=done.get("sources") or [],
+        messages=done.get("messages") or [],
+    )
 
 
 # ─── BERTopic ─────────────────────────────────────────────────────────────────

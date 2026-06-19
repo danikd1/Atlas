@@ -156,7 +156,12 @@ def _run(task_id, min_topic_size, n_categories, skip_rag, source_filter, limit, 
 
     except Exception as e:
         logger.exception("BERTopic pipeline error: %s", e)
-        _set(task_id, status="error", progress=0.0, message=str(e), error=str(e))
+        err = str(e)
+        if "max_df corresponds to" in err or "min_df" in err:
+            user_msg = "Слишком мало статей за выбранный период. Увеличьте диапазон дней и попробуйте снова."
+        else:
+            user_msg = err
+        _set(task_id, status="error", progress=0.0, message=user_msg, error=user_msg)
 
 
 # ── Step functions ─────────────────────────────────────────────────────────

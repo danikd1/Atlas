@@ -338,6 +338,15 @@ def ensure_tables(conn) -> None:
                 )
             except Exception:
                 pass
+            try:
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_rag_documents_text_fts
+                    ON {POSTGRES_TABLE_RAG_DOCUMENTS} USING gin(to_tsvector('simple', text_payload));
+                    """
+                )
+            except Exception:
+                pass
 
 
         # Миграция: новые колонки в collections для BERTopic
