@@ -24,6 +24,7 @@ class ArticleRef:
     link: str
     title: str
     published_at: Any = None
+    article_id: int = 0  # ID из processed_articles (для навигации в reader mode)
 
 
 @dataclass
@@ -85,7 +86,7 @@ def assign_clusters_to_sections(
             articles = []
             for a in info.articles[:max_articles_per_cluster]:
                 if a.link not in used_links:
-                    articles.append({"link": a.link, "title": a.title, "published_at": a.published_at})
+                    articles.append({"link": a.link, "title": a.title, "published_at": a.published_at, "article_id": a.article_id})
                     used_links.add(a.link)
             # Пропускаем пункт, если после дедупликации не осталось статей (все уже были выше)
             if not articles:

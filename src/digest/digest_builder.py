@@ -44,6 +44,8 @@ class DigestOptions:
     max_items_per_section: int = DIGEST_MAX_ITEMS_PER_SECTION
     max_articles_per_cluster: int = DIGEST_MAX_ARTICLES_PER_CLUSTER
     typical_chunks_per_cluster: int = DIGEST_TYPICAL_CHUNKS_PER_CLUSTER
+    gigachat_credentials: Optional[str] = None
+    gigachat_model: Optional[str] = None
 
 
 @dataclass
@@ -163,7 +165,7 @@ def build_digest(
 
     # Уникальные cluster_id
     cluster_ids = sorted(set(cwc.cluster_id for cwc in chunk_with_cluster))
-    client = create_gigachat_client()
+    client = create_gigachat_client(credentials=options.gigachat_credentials, model=options.gigachat_model)
 
     cluster_infos: List[ClusterInfo] = []
     for cid in cluster_ids:

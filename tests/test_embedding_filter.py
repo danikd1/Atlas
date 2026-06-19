@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 from sentence_transformers import SentenceTransformer
 
-from src.embedding_filter import (
+from src.pipeline.embedding_filter import (
     apply_embedding_filter,
     build_topic_embedding_from_descriptions,
     filter_articles_by_embedding,

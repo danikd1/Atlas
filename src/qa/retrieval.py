@@ -10,15 +10,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import logging
+
 import psycopg2
 
 from config.config import (
     EMBEDDING_MODEL_NAME,
     POSTGRES_ENABLED,
+    POSTGRES_TABLE_PROCESSED_ARTICLES,
     POSTGRES_TABLE_RAG_DOCUMENTS,
 )
-from src.embedding_filter import get_embedding_model
+from src.pipeline.embedding_filter import get_embedding_model
 from src.tools.db_state import get_connection
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,6 +38,7 @@ class RetrievedChunk:
     text_payload: str
     embed_similarity_to_topic: Optional[float]
     distance: float  # pgvector distance (меньше = ближе)
+    article_id: int = 0  # заполняется в retrieve_chunks_by_feeds() для навигации в Reader mode
 
 
 def _embedding_to_vector_str(embedding: Sequence[float]) -> str:
@@ -136,6 +142,288 @@ def retrieve_chunks(
                     text_payload=row.get("text_payload") or "",
                     embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
                     distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                )
+            )
+    return chunks
+
+
+def hybrid_retrieve_chunks(
+    conn,
+    query: str,
+    query_embedding: Sequence[float],
+    collection_id: int,
+    top_k: int = 250,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[RetrievedChunk]:
+    """
+    Гибридный retrieval: вектор + BM25 + RRF, на уровне чанков.
+
+    Аналог гибридного поиска из search_articles, но:
+    - фильтрует по collection_id (а не по дате/всей таблице)
+    - не группирует по статье — возвращает отдельные чанки (нужно для RAG)
+    - ключ RRF = (link, chunk_index)
+
+    Returns:
+        Список RetrievedChunk, отсортированный по убыванию RRF-score, до top_k элементов.
+    """
+    if conn is None or not POSTGRES_ENABLED or not query_embedding:
+        return []
+
+    emb_str = _embedding_to_vector_str(query_embedding)
+
+    conditions = ["collection_id = %s"]
+    params: List[Any] = [collection_id]
+
+    if date_from is not None:
+        conditions.append("published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("published_at <= %s")
+        params.append(date_to)
+
+    where_clause = "WHERE " + " AND ".join(conditions)
+
+    # ── Шаг 1а: top-250 чанков по вектору ───────────────────────────
+    vec_sql = f"""
+        SELECT collection_id, link, chunk_index, title, summary, source,
+               published_at, text_payload, embed_similarity_to_topic,
+               (embedding <-> %s::vector) AS distance
+        FROM {POSTGRES_TABLE_RAG_DOCUMENTS}
+        {where_clause}
+        ORDER BY embedding <-> %s::vector
+        LIMIT 250;
+    """
+    with conn.cursor() as cur:
+        cur.execute(vec_sql, [emb_str] + params + [emb_str])
+        vec_rows = cur.fetchall()
+
+    # ── Шаг 1б: top-250 чанков по BM25 ─────────────────────────────
+    bm25_rows: List[Any] = []
+    try:
+        bm25_sql = f"""
+            WITH fts AS (
+                SELECT collection_id, link, chunk_index, title, summary, source,
+                       published_at, text_payload, embed_similarity_to_topic,
+                       to_tsvector('simple', text_payload) AS tsv
+                FROM {POSTGRES_TABLE_RAG_DOCUMENTS}
+                {where_clause}
+            )
+            SELECT collection_id, link, chunk_index, title, summary, source,
+                   published_at, text_payload, embed_similarity_to_topic,
+                   ts_rank(tsv, plainto_tsquery('simple', %s)) AS bm25_score
+            FROM fts
+            WHERE tsv @@ plainto_tsquery('simple', %s)
+            ORDER BY bm25_score DESC
+            LIMIT 250;
+        """
+        with conn.cursor() as cur:
+            cur.execute(bm25_sql, params + [query, query])
+            bm25_rows = cur.fetchall()
+    except Exception as bm25_err:
+        logger.warning("hybrid_retrieve_chunks: BM25 недоступен (%s) — только вектор", bm25_err)
+
+    if not vec_rows and not bm25_rows:
+        return []
+
+    # ── Шаг 2: RRF по (link, chunk_index) ───────────────────────────
+    def _key(row) -> tuple:
+        return (row["link"], row["chunk_index"])
+
+    vec_by_key  = {_key(r): r for r in vec_rows}
+    bm25_by_key = {_key(r): r for r in bm25_rows}
+
+    vec_rank  = {_key(r): i + 1 for i, r in enumerate(vec_rows)}
+    bm25_rank = {_key(r): i + 1 for i, r in enumerate(bm25_rows)}
+
+    K = 60
+    all_keys = set(vec_by_key.keys()) | set(bm25_by_key.keys())
+    scored: List[tuple] = []
+    for key in all_keys:
+        vr  = vec_rank.get(key,  len(vec_rows)  + 1000)
+        br  = bm25_rank.get(key, len(bm25_rows) + 1000)
+        rrf = 1.0 / (K + vr) + 1.0 / (K + br)
+        row = vec_by_key.get(key) or bm25_by_key[key]
+        dist = float(row["distance"]) if row.get("distance") is not None else float("inf")
+        scored.append((rrf, dist, row))
+
+    scored.sort(key=lambda x: -x[0])
+
+    logger.debug(
+        "hybrid_retrieve_chunks: вектор=%d  BM25=%d  после RRF=%d  top_k=%d",
+        len(vec_rows), len(bm25_rows), len(scored), top_k,
+    )
+
+    chunks: List[RetrievedChunk] = []
+    for _rrf, dist, row in scored[:top_k]:
+        chunks.append(RetrievedChunk(
+            collection_id=row["collection_id"],
+            link=row["link"],
+            chunk_index=row["chunk_index"],
+            title=row.get("title") or "",
+            summary=row.get("summary") or "",
+            source=row.get("source") or "",
+            published_at=row.get("published_at"),
+            text_payload=row.get("text_payload") or "",
+            embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
+            distance=dist,
+        ))
+    return chunks
+
+
+def retrieve_chunks_by_feeds(
+    conn,
+    query_embedding: Sequence[float],
+    collection_id: int,
+    feed_ids: List[int],
+    user_id: int,
+    top_k: int = 40,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[RetrievedChunk]:
+    """
+    Векторный поиск по чанкам глобальной RAG-коллекции с фильтром по лентам пользователя.
+
+    Ключевое отличие от retrieve_chunks():
+    - JOIN user_feeds для per-user изоляции
+    - JOIN processed_articles для article_id (навигация в Reader mode)
+    - Фильтр по feed_ids + user_id
+    """
+    if conn is None or not POSTGRES_ENABLED:
+        return []
+    if not query_embedding or not feed_ids:
+        return []
+
+    emb_str = _embedding_to_vector_str(query_embedding)
+
+    conditions = ["rd.collection_id = %s", "pa.feed_id = ANY(%s)"]
+    params: List[Any] = [collection_id, feed_ids]
+
+    if date_from is not None:
+        conditions.append("rd.published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("rd.published_at <= %s")
+        params.append(date_to)
+
+    where_clause = " AND ".join(conditions)
+    params_for_query = [emb_str] + [user_id] + params + [emb_str, top_k]
+
+    sql = f"""
+        SELECT
+            rd.collection_id,
+            rd.link,
+            rd.chunk_index,
+            rd.title,
+            rd.summary,
+            rd.source,
+            rd.published_at,
+            rd.text_payload,
+            rd.embed_similarity_to_topic,
+            (rd.embedding <-> %s::vector) AS distance,
+            pa.id AS article_id
+        FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+        JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = rd.link
+        JOIN user_feeds uf ON uf.feed_id = pa.feed_id AND uf.user_id = %s
+        WHERE {where_clause}
+        ORDER BY rd.embedding <-> %s::vector
+        LIMIT %s;
+    """
+
+    chunks: List[RetrievedChunk] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, params_for_query)
+        rows = cur.fetchall()
+        for row in rows:
+            chunks.append(
+                RetrievedChunk(
+                    collection_id=row["collection_id"],
+                    link=row["link"],
+                    chunk_index=row["chunk_index"],
+                    title=row.get("title") or "",
+                    summary=row.get("summary") or "",
+                    source=row.get("source") or "",
+                    published_at=row.get("published_at"),
+                    text_payload=row.get("text_payload") or "",
+                    embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
+                    distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                    article_id=int(row["article_id"]) if row.get("article_id") else 0,
+                )
+            )
+    return chunks
+
+
+def retrieve_chunks_by_collection(
+    conn,
+    query_embedding: Sequence[float],
+    rag_collection_id: int,
+    bertopic_collection_id: int,
+    top_k: int = 40,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+) -> List[RetrievedChunk]:
+    """
+    Векторный поиск по чанкам глобальной RAG-коллекции с фильтром по BERTopic-коллекции.
+    Аналог retrieve_chunks_by_feeds, но изоляция через bertopic_assignments вместо user_feeds.
+    """
+    if conn is None or not POSTGRES_ENABLED or not query_embedding:
+        return []
+
+    emb_str = _embedding_to_vector_str(query_embedding)
+    conditions = ["rd.collection_id = %s"]
+    params: List[Any] = [rag_collection_id]
+
+    if date_from is not None:
+        conditions.append("rd.published_at >= %s")
+        params.append(date_from)
+    if date_to is not None:
+        conditions.append("rd.published_at <= %s")
+        params.append(date_to)
+
+    where_clause = " AND ".join(conditions)
+    params_for_query = [emb_str, bertopic_collection_id] + params + [emb_str, top_k]
+
+    sql = f"""
+        SELECT
+            rd.collection_id,
+            rd.link,
+            rd.chunk_index,
+            rd.title,
+            rd.summary,
+            rd.source,
+            rd.published_at,
+            rd.text_payload,
+            rd.embed_similarity_to_topic,
+            (rd.embedding <-> %s::vector) AS distance,
+            pa.id AS article_id
+        FROM {POSTGRES_TABLE_RAG_DOCUMENTS} rd
+        JOIN {POSTGRES_TABLE_PROCESSED_ARTICLES} pa ON pa.link = rd.link
+        JOIN collections c ON c.id = %s
+        JOIN bertopic_assignments ba ON ba.link = rd.link
+            AND ba.topic_id = c.bertopic_topic_id
+            AND ba.owner_id = c.owner_id
+        WHERE {where_clause}
+        ORDER BY rd.embedding <-> %s::vector
+        LIMIT %s;
+    """
+
+    chunks: List[RetrievedChunk] = []
+    with conn.cursor() as cur:
+        cur.execute(sql, params_for_query)
+        for row in cur.fetchall():
+            chunks.append(
+                RetrievedChunk(
+                    collection_id=row["collection_id"],
+                    link=row["link"],
+                    chunk_index=row["chunk_index"],
+                    title=row.get("title") or "",
+                    summary=row.get("summary") or "",
+                    source=row.get("source") or "",
+                    published_at=row.get("published_at"),
+                    text_payload=row.get("text_payload") or "",
+                    embed_similarity_to_topic=row.get("embed_similarity_to_topic"),
+                    distance=float(row["distance"]) if row.get("distance") is not None else 0.0,
+                    article_id=int(row["article_id"]) if row.get("article_id") else 0,
                 )
             )
     return chunks

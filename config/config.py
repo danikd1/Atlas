@@ -1,220 +1,309 @@
 """
 Конфигурация проекта: RSS-ленты и параметры пайплайна.
 """
+import getpass
 import os
+from enum import Enum
+
+from dotenv import load_dotenv
+load_dotenv()  # загружает .env из корня проекта при локальном запуске; в Docker игнорируется
+
+
+class RelevanceStatus(str, Enum):
+    """Статусы релевантности статей."""
+    RELEVANT = "relevant"
+    IRRELEVANT = "irrelevant"
+    NEED_FULLTEXT = "need_fulltext"
+
+    def __str__(self) -> str:
+        return self.value
 
 # RSS-источники
+# Формат: {"Название": {"url": "...", "category": "..."}}
+# Категории: AI & ML, Engineering, Cloud & DevOps, Data, Security,
+#            Design, Tools, Management, Tech News, Case Studies
 RSS_FEEDS = {
-    # "pm": "https://habr.com/ru/rss/hubs/pm/articles/",
-    # "hr_management": "https://habr.com/ru/rss/hubs/hr_management/articles/",
-    # "statistics": "https://habr.com/ru/rss/hubs/statistics/articles/",
-    # "productpm": "https://habr.com/ru/rss/hubs/productpm/articles/",
-    # "analysis_design": "https://habr.com/ru/rss/hubs/analysis_design/articles/",
-    # "dev_management": "https://habr.com/ru/rss/hubs/dev_management/articles/",
-    # "complete_code": "https://habr.com/ru/rss/hubs/complete_code/articles/",
-    # "devops": "https://habr.com/ru/rss/hubs/devops/articles/",
-    # "git": "https://habr.com/ru/rss/hubs/git/articles/",
-    # "beeline_cloud": "https://habr.com/ru/rss/companies/beeline_cloud/articles/",
-    # "agile": "https://habr.com/ru/rss/hubs/agile/articles/",
-    # "web_testing": "https://habr.com/ru/rss/hubs/web_testing/articles/",
-    # "mobile_testing": "https://habr.com/ru/rss/hubs/mobile_testing/articles/",
-    # "programming": "https://habr.com/ru/rss/hubs/programming/articles/",
-    # "java": "https://habr.com/ru/rss/hubs/java/articles/",
-    # "kotlin": "https://habr.com/ru/rss/hubs/kotlin/articles/",
-    # "it_testing": "https://habr.com/ru/rss/hubs/it_testing/articles/",
-    # "cian_company": "https://habr.com/ru/rss/companies/cian/articles/",
-    # "infosecurity": "https://habr.com/ru/rss/hubs/infosecurity/articles/",
-    # "vk_company": "https://habr.com/ru/rss/companies/vk/articles/",
-    # "python": "https://habr.com/ru/rss/hubs/python/articles/",
-    # "win_dev": "https://habr.com/ru/rss/hubs/win_dev/articles/",
-    # "oleg_bunin": "https://habr.com/ru/rss/companies/oleg-bunin/articles/",
-    # "raiffeisenbank": "https://habr.com/ru/rss/companies/raiffeisenbank/articles/",
-    # "engineering_systems": "https://habr.com/ru/rss/hubs/engineering_systems/articles/",
-    # "simbirsoft": "https://habr.com/ru/rss/companies/simbirsoft/articles/",
-    # "tochka": "https://habr.com/ru/rss/companies/tochka/articles/",
-    # "sberbank": "https://habr.com/ru/rss/companies/sberbank/articles/",
-    # "dwh": "https://habr.com/ru/rss/hubs/dwh/articles/",
-    # "otus_company": "https://habr.com/ru/rss/companies/otus/articles/",
-    # "refactoring": "https://habr.com/ru/rss/hubs/refactoring/articles/",
-    # "research": "https://habr.com/ru/rss/hubs/research/articles/",
-    # "avito_company": "https://habr.com/ru/rss/companies/avito/articles/",
-    # "testograf_company": "https://habr.com/ru/rss/companies/testograf/articles/",
-    # "sales": "https://habr.com/ru/rss/hubs/sales/articles/",
-    # "business_models": "https://habr.com/ru/rss/hubs/business_models/articles/",
-    # "itcompanies": "https://habr.com/ru/rss/hubs/itcompanies/articles/",
-    # "artificial_intelligence": "https://habr.com/ru/rss/hubs/artificial_intelligence/articles/",
-    # "vktech_company": "https://habr.com/ru/rss/companies/vktech/articles/",
-    # "nlp": "https://habr.com/ru/rss/hubs/natural_language_processing/articles/",
-    # "machine_learning": "https://habr.com/ru/rss/hubs/machine_learning/articles/",
-    # "futurenow": "https://habr.com/ru/rss/hubs/futurenow/articles/",
-    # "ru_mts": "https://habr.com/ru/rss/companies/ru_mts/articles/",
-    # "popular_science": "https://habr.com/ru/rss/hubs/popular_science/articles/",
-    # "cian": "https://habr.com/ru/rss/companies/cian/articles/",
-    # "dododev": "https://habr.com/ru/rss/companies/dododev/articles/",
-    # "gazprombank": "https://habr.com/ru/rss/companies/gazprombank/articles/",
-    # "habr": "https://habr.com/ru/rss/companies/habr/articles/",
-    # "jetinfosystems": "https://habr.com/ru/rss/companies/jetinfosystems/articles/",
-    # "mts_ai": "https://habr.com/ru/rss/companies/mts_ai/articles/",
-    # "mws": "https://habr.com/ru/rss/companies/mws/articles/",
-    # "ods": "https://habr.com/ru/rss/companies/ods/articles/",
-    # "yadro": "https://habr.com/ru/rss/companies/yadro/articles/",
-    # "cleverpumpkin": "https://habr.com/ru/rss/companies/cleverpumpkin/articles/",
-    # "inferit": "https://habr.com/ru/rss/companies/inferit/articles/",
-    # "onlinepatent": "https://habr.com/ru/rss/companies/onlinepatent/articles/",
-    # "x5tech": "https://habr.com/ru/rss/companies/x5tech/articles/",
-    # "redmadrobot": "https://habr.com/ru/rss/companies/redmadrobot/articles/",
-    # "webdev": "https://habr.com/ru/rss/hubs/webdev/articles/",
-    # "itstandarts": "https://habr.com/ru/rss/hubs/itstandarts/articles/",
-    # "usability": "https://habr.com/ru/rss/hubs/usability/articles/",
-    # "api": "https://habr.com/ru/rss/hubs/api/articles/",
-    # "reverse_engineering": "https://habr.com/ru/rss/hubs/reverse-engineering/articles/",
-    # "hi": "https://habr.com/ru/rss/hubs/hi/articles/",
-    # "crypto": "https://habr.com/ru/rss/hubs/crypto/articles/",
-    # "system_programming": "https://habr.com/ru/rss/hubs/system_programming/articles/",
-    # "virtualization": "https://habr.com/ru/rss/hubs/virtualization/articles/",
-    # "cvs": "https://habr.com/ru/rss/hubs/cvs/articles/",
-    # "tdd": "https://habr.com/ru/rss/hubs/tdd/articles/",
-    # "algorithms": "https://habr.com/ru/rss/hubs/algorithms/articles/",
-    # "parallel_programming": "https://habr.com/ru/rss/hubs/parallel_programming/articles/",
-    # "funcprog": "https://habr.com/ru/rss/hubs/funcprog/articles/",
-    # "industrial_control_system": "https://habr.com/ru/rss/hubs/industrial_control_system/articles/",
-    # "lib": "https://habr.com/ru/rss/hubs/lib/articles/",
-    # "distributed_systems": "https://habr.com/ru/rss/hubs/distributed_systems/articles/",
-    # "data_engineering": "https://habr.com/ru/rss/hubs/data_engineering/articles/",
-    # "visual_programming": "https://habr.com/ru/rss/hubs/visual_programming/articles/",
-    # "mobile_dev": "https://habr.com/ru/rss/hubs/mobile_dev/articles/",
-    # "gtd": "https://habr.com/ru/rss/hubs/gtd/articles/",
-    # "weban": "https://habr.com/ru/rss/hubs/weban/articles/",
-    # "business_laws": "https://habr.com/ru/rss/hubs/business-laws/articles/",
-    # "career": "https://habr.com/ru/rss/hubs/career/articles/",
-    # "technical_writing": "https://habr.com/ru/rss/hubs/technical_writing/articles/",
-    # "startuprise": "https://habr.com/ru/rss/hubs/startuprise/articles/",
-    # "terminator": "https://habr.com/ru/rss/hubs/terminator/articles/",
-    # "community_management": "https://habr.com/ru/rss/hubs/community_management/articles/",
 
-    "toptal1": "https://www.toptal.com/project-managers/blog.rss",
-    "toptal2": "https://www.toptal.com/product-managers/blog.rss",
-    "toptal3": "https://www.toptal.com/management-consultants/blog.rss",
-    "toptal4": "https://www.toptal.com/developers/blog.rss",
+    # ══════════════════════════════════════════════════════════════
+    # HABR — тематические хабы
+    # ══════════════════════════════════════════════════════════════
 
-    "Github Insights": "https://github.blog/news-insights/feed/",
-    "Github AI & ML": "https://github.blog/ai-and-ml/feed/",
-    "Github Developer skills": "https://github.blog/developer-skills/feed/",
-    "Github Engineering": "https://github.blog/engineering/feed/",
-    "Github Enterprise software": "https://github.blog/enterprise-software/feed/",
-    "Github Open Source": "https://github.blog/open-source/feed/",
-    "Github Security": "https://github.blog/security/feed/",
-    "Github": "https://github.blog/feed/",
-    
-    # "OpenAI": "https://openai.com/news/rss.xml", #почему-то нужен vpn
+    # AI & ML
+    "Habr: Искусственный интеллект": {"url": "https://habr.com/ru/rss/hubs/artificial_intelligence/articles/", "category": "AI & ML"},
+    "Habr: Машинное обучение":       {"url": "https://habr.com/ru/rss/hubs/machine_learning/articles/",         "category": "AI & ML"},
+    "Habr: NLP":                     {"url": "https://habr.com/ru/rss/hubs/natural_language_processing/articles/", "category": "AI & ML"},
 
-    "Google": "https://blog.google/rss/",
-    "Google DeepMind": "https://deepmind.google/blog/rss.xml",
-    "Google Research": "https://research.google/blog/rss/",
-    "Google Developers": "https://developers.googleblog.com/feeds/posts/default/?alt=rss",
-    "Google Cloud": "https://cloudblog.withgoogle.com/products/devops-sre/rss/",
+    # Engineering
+    "Habr: Программирование":          {"url": "https://habr.com/ru/rss/hubs/programming/articles/",          "category": "Engineering"},
+    "Habr: Python":                    {"url": "https://habr.com/ru/rss/hubs/python/articles/",                "category": "Engineering"},
+    "Habr: Java":                      {"url": "https://habr.com/ru/rss/hubs/java/articles/",                  "category": "Engineering"},
+    "Habr: Kotlin":                    {"url": "https://habr.com/ru/rss/hubs/kotlin/articles/",                "category": "Engineering"},
+    "Habr: Веб-разработка":            {"url": "https://habr.com/ru/rss/hubs/webdev/articles/",                "category": "Engineering"},
+    "Habr: Мобильная разработка":      {"url": "https://habr.com/ru/rss/hubs/mobile_dev/articles/",            "category": "Engineering"},
+    "Habr: Алгоритмы":                 {"url": "https://habr.com/ru/rss/hubs/algorithms/articles/",            "category": "Engineering"},
+    "Habr: Распределённые системы":    {"url": "https://habr.com/ru/rss/hubs/distributed_systems/articles/",   "category": "Engineering"},
+    "Habr: Системное программирование":{"url": "https://habr.com/ru/rss/hubs/system_programming/articles/",    "category": "Engineering"},
+    "Habr: API":                       {"url": "https://habr.com/ru/rss/hubs/api/articles/",                   "category": "Engineering"},
+    "Habr: Git":                       {"url": "https://habr.com/ru/rss/hubs/git/articles/",                   "category": "Engineering"},
+    "Habr: Рефакторинг":               {"url": "https://habr.com/ru/rss/hubs/refactoring/articles/",           "category": "Engineering"},
+    "Habr: Чистый код":                {"url": "https://habr.com/ru/rss/hubs/complete_code/articles/",         "category": "Engineering"},
+    "Habr: TDD":                       {"url": "https://habr.com/ru/rss/hubs/tdd/articles/",                   "category": "Engineering"},
+    "Habr: Тестирование":              {"url": "https://habr.com/ru/rss/hubs/it_testing/articles/",            "category": "Engineering"},
+    "Habr: Тестирование веба":         {"url": "https://habr.com/ru/rss/hubs/web_testing/articles/",           "category": "Engineering"},
+    "Habr: Тестирование мобильных":    {"url": "https://habr.com/ru/rss/hubs/mobile_testing/articles/",        "category": "Engineering"},
+    "Habr: Параллельное программирование": {"url": "https://habr.com/ru/rss/hubs/parallel_programming/articles/", "category": "Engineering"},
+    "Habr: Функциональное программирование": {"url": "https://habr.com/ru/rss/hubs/funcprog/articles/",        "category": "Engineering"},
+    "Habr: Техническое писательство":  {"url": "https://habr.com/ru/rss/hubs/technical_writing/articles/",     "category": "Engineering"},
+    "Habr: IT-стандарты":              {"url": "https://habr.com/ru/rss/hubs/itstandarts/articles/",           "category": "Engineering"},
+    "Habr: Разработка под Windows":    {"url": "https://habr.com/ru/rss/hubs/win_dev/articles/",               "category": "Engineering"},
 
-    "Google Cloud ai-machine-learning": "https://cloudblog.withgoogle.com/products/ai-machine-learning/rss/",
-    "Google Cloud api-management": "https://cloudblog.withgoogle.com/products/api-management/rss/",
-    "Google Cloud Application Development": "https://cloudblog.withgoogle.com/products/application-development/rss/",
-    "Google Cloud Application Modernization": "https://cloudblog.withgoogle.com/products/application-modernization/rss/",
-    "Google Cloud Chrome Enterprise": "https://cloudblog.withgoogle.com/products/chrome-enterprise/rss/",
-    "Google Cloud Compute": "https://cloudblog.withgoogle.com/products/compute/rss/",
-    "Google Cloud Containers & Kubernetes": "https://cloudblog.withgoogle.com/products/containers-kubernetes/rss/",
-    "Google Cloud Data Analytics": "https://cloudblog.withgoogle.com/products/data-analytics/rss/",
-    "Google Cloud Databases": "https://cloudblog.withgoogle.com/products/databases/rss/",
-    "Google Cloud DevOps & SRE": "https://cloudblog.withgoogle.com/products/devops-sre/rss/",
-    "Google Cloud Threat Intelligence": "https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/",
-    "Google Cloud Infrastructure": "https://cloudblog.withgoogle.com/products/infrastructure/rss/",
-    "Google Cloud Infrastructure Modernization": "https://cloudblog.withgoogle.com/products/infrastructure-modernization/rss/",
-    "Google Cloud Storage & Data Transfer": "https://cloudblog.withgoogle.com/products/storage-data-transfer/rss/",
-    "Google Cloud Startups": "https://cloudblog.withgoogle.com/topics/startups/rss/",
+    # Cloud & DevOps
+    "Habr: DevOps":          {"url": "https://habr.com/ru/rss/hubs/devops/articles/",         "category": "Cloud & DevOps"},
+    "Habr: Виртуализация":   {"url": "https://habr.com/ru/rss/hubs/virtualization/articles/", "category": "Cloud & DevOps"},
 
-    "Google workspace": "https://blog.google/products-and-platforms/products/workspace/rss/",
-    "Google Ads & Commerce": "https://blog.google/products/ads-commerce/rss/",
+    # Data
+    "Habr: Data Engineering": {"url": "https://habr.com/ru/rss/hubs/data_engineering/articles/", "category": "Data"},
+    "Habr: DWH":               {"url": "https://habr.com/ru/rss/hubs/dwh/articles/",              "category": "Data"},
+    "Habr: Статистика":        {"url": "https://habr.com/ru/rss/hubs/statistics/articles/",       "category": "Data"},
+    "Habr: Веб-аналитика":     {"url": "https://habr.com/ru/rss/hubs/weban/articles/",            "category": "Data"},
 
-    "Microsoft Azure Blog": "https://azure.microsoft.com/en-us/blog/feed/",
-    "Microsoft Azure Blog AI Professionals": "https://azure.microsoft.com/en-us/blog/audience/ai-professionals/feed/",
-    "Microsoft Azure Blog Business Decision Makers": "https://azure.microsoft.com/en-us/blog/audience/business-decision-makers/feed/",
-    "Microsoft Azure Blog Data Professionals": "https://azure.microsoft.com/en-us/blog/audience/data-professionals/feed/",
-    "Microsoft Azure Blog Developers": "https://azure.microsoft.com/en-us/blog/audience/developers/feed/",
-    "Microsoft Azure Blog IT Decision Makers": "https://azure.microsoft.com/en-us/blog/audience/it-decision-makers/feed/",
-    "Microsoft Azure Blog IT Implementors": "https://azure.microsoft.com/en-us/blog/audience/it-implementors/feed/",
-    "Microsoft Azure Blogs Best Practices": "https://azure.microsoft.com/en-us/blog/content-type/best-practices/feed/",
-    "Microsoft Azure Blogs Customer Stories": "https://azure.microsoft.com/en-us/blog/content-type/customer-stories/feed/",
+    # Security
+    "Habr: Информационная безопасность": {"url": "https://habr.com/ru/rss/hubs/infosecurity/articles/",      "category": "Security"},
+    "Habr: Криптография":                {"url": "https://habr.com/ru/rss/hubs/crypto/articles/",            "category": "Security"},
+    "Habr: Реверс-инжиниринг":           {"url": "https://habr.com/ru/rss/hubs/reverse-engineering/articles/", "category": "Security"},
 
-    #нужен vpn
-    # "AWS Blog Insights": "https://aws.amazon.com/ru/blogs/aws-insights/feed/",
-    # "AWS Blog AWS": "https://aws.amazon.com/ru/blogs/aws/feed/",
-    # "AWS Blog SMB": "https://aws.amazon.com/ru/blogs/smb/feed/",
-    # "AWS Blog Business Intelligence": "https://aws.amazon.com/ru/blogs/business-intelligence/feed/",
-    # "AWS Blog DevOps": "https://aws.amazon.com/ru/blogs/devops/feed/",
-    # "AWS Blog Infrastructure and Automation": "https://aws.amazon.com/ru/blogs/infrastructure-and-automation/feed/",
-    # "AWS Blog Open Source": "https://aws.amazon.com/ru/blogs/opensource/feed/",
-    # "AWS Blog Public Sector": "https://aws.amazon.com/ru/blogs/publicsector/feed/",
-    # "AWS Blog Russia": "https://aws.amazon.com/ru/blogs/rus/feed/",
+    # Design
+    "Habr: Usability": {"url": "https://habr.com/ru/rss/hubs/usability/articles/",       "category": "Design"},
+    "Habr: Анализ и проектирование": {"url": "https://habr.com/ru/rss/hubs/analysis_design/articles/", "category": "Design"},
 
-    "MIT Technology Review": "https://www.technologyreview.com/feed",
+    # Management
+    "Habr: PM":                   {"url": "https://habr.com/ru/rss/hubs/pm/articles/",              "category": "Management"},
+    "Habr: Продуктовый PM":       {"url": "https://habr.com/ru/rss/hubs/productpm/articles/",       "category": "Management"},
+    "Habr: Agile":                {"url": "https://habr.com/ru/rss/hubs/agile/articles/",           "category": "Management"},
+    "Habr: Управление разработкой":{"url": "https://habr.com/ru/rss/hubs/dev_management/articles/", "category": "Management"},
+    "Habr: HR Management":        {"url": "https://habr.com/ru/rss/hubs/hr_management/articles/",   "category": "Management"},
+    "Habr: GTD":                  {"url": "https://habr.com/ru/rss/hubs/gtd/articles/",             "category": "Management"},
+    "Habr: Карьера":              {"url": "https://habr.com/ru/rss/hubs/career/articles/",          "category": "Management"},
+    "Habr: Стартапы":             {"url": "https://habr.com/ru/rss/hubs/startuprise/articles/",     "category": "Management"},
+    "Habr: Бизнес-модели":        {"url": "https://habr.com/ru/rss/hubs/business_models/articles/", "category": "Management"},
+    "Habr: Законы и бизнес":      {"url": "https://habr.com/ru/rss/hubs/business-laws/articles/",   "category": "Management"},
+    "Habr: Продажи":              {"url": "https://habr.com/ru/rss/hubs/sales/articles/",           "category": "Management"},
 
-    "Atlassian Communication": "https://www.atlassian.com/blog/communication/feed",
-    "Atlassian Distributed Work": "https://www.atlassian.com/blog/distributed-work/feed",
-    "Atlassian Leadership": "https://www.atlassian.com/blog/leadership/feed",
-    "Atlassian Productivity": "https://www.atlassian.com/blog/productivity/feed",
-    "Atlassian Strategy": "https://www.atlassian.com/blog/strategy/feed",
-    "Atlassian Teamwork": "https://www.atlassian.com/blog/teamwork/feed",
+    # Tech News
+    "Habr: IT-компании":    {"url": "https://habr.com/ru/rss/hubs/itcompanies/articles/",   "category": "Tech News"},
+    "Habr: Будущее здесь":  {"url": "https://habr.com/ru/rss/hubs/futurenow/articles/",     "category": "Tech News"},
+    "Habr: Научпоп":        {"url": "https://habr.com/ru/rss/hubs/popular_science/articles/", "category": "Tech News"},
+    "Habr: Хай-тек":        {"url": "https://habr.com/ru/rss/hubs/hi/articles/",            "category": "Tech News"},
+    "Habr: Исследования":   {"url": "https://habr.com/ru/rss/hubs/research/articles/",      "category": "Tech News"},
 
-    "Atlassian Add-ons": "https://www.atlassian.com/blog/add-ons/feed",
-    "Atlassian Bitbucket": "https://www.atlassian.com/blog/bitbucket/feed",
-    "Atlassian Crucible": "https://www.atlassian.com/blog/crucible/feed",
-    "Atlassian Halp": "https://www.atlassian.com/blog/halp/feed",
-    "Atlassian Access": "https://www.atlassian.com/blog/access/feed",
-    "Atlassian Confluence": "https://www.atlassian.com/blog/confluence/feed",
-    "Atlassian Fisheye": "https://www.atlassian.com/blog/fisheye/feed",
-    "Atlassian Jira": "https://www.atlassian.com/blog/jira/feed",
-    "Atlassian Bamboo": "https://www.atlassian.com/blog/bamboo/feed",
-    "Atlassian Crowd": "https://www.atlassian.com/blog/crowd/feed",
-    "Atlassian Focus": "https://www.atlassian.com/blog/focus/feed",
-    "Atlassian Jira Align": "https://www.atlassian.com/blog/jira-align/feed",
-    "Atlassian Jira Product Discovery": "https://www.atlassian.com/blog/jira-product-discovery/feed",
-    "Atlassian Sourcetree": "https://www.atlassian.com/blog/sourcetree/feed",
-    "Atlassian Jira Service Management": "https://www.atlassian.com/blog/jira-service-management/feed",
-    "Atlassian Statuspage": "https://www.atlassian.com/blog/statuspage/feed",
-    "Atlassian Loom": "https://www.atlassian.com/blog/loom/feed",
-    "Atlassian Trello   ": "https://www.atlassian.com/blog/trello/feed",
+    # ══════════════════════════════════════════════════════════════
+    # HABR — корпоративные блоги
+    # ══════════════════════════════════════════════════════════════
 
-    "Atlassian Artificial Intelligence": "https://www.atlassian.com/blog/artificial-intelligence/feed",
-    "Atlassian Agile": "https://www.atlassian.com/blog/agile/feed",
-    "Atlassian Atlassian Engineering": "https://www.atlassian.com/blog/atlassian-engineering/feed",
-    "Atlassian Continuous Delivery": "https://www.atlassian.com/blog/continuous-delivery/feed",
-    "Atlassian Design": "https://www.atlassian.com/blog/design/feed",
-    "Atlassian Developer": "https://www.atlassian.com/blog/developer/feed",
-    "Atlassian Devops": "https://www.atlassian.com/blog/devops/feed",
-    "Atlassian Enterprise": "https://www.atlassian.com/blog/enterprise/feed",
-    "Atlassian Git": "https://www.atlassian.com/blog/git/feed",
-    "Atlassian It Service Management": "https://www.atlassian.com/blog/it-service-management/feed",
-    "Atlassian Inside Atlassian": "https://www.atlassian.com/blog/inside-atlassian/feed",
-    "Atlassian Project Management": "https://www.atlassian.com/blog/project-management/feed",
-    "Atlassian Work Management": "https://www.atlassian.com/blog/work-management/feed",
-    "Atlassian Announcements": "https://www.atlassian.com/blog/announcements/feed",
+    "Habr: Авито":          {"url": "https://habr.com/ru/rss/companies/avito/articles/",          "category": "Case Studies"},
+    "Habr: VK":             {"url": "https://habr.com/ru/rss/companies/vk/articles/",             "category": "Tech News"},
+    "Habr: VK Tech":        {"url": "https://habr.com/ru/rss/companies/vktech/articles/",         "category": "Engineering"},
+    "Habr: Сбер":           {"url": "https://habr.com/ru/rss/companies/sberbank/articles/",       "category": "Case Studies"},
+    "Habr: МТС":            {"url": "https://habr.com/ru/rss/companies/ru_mts/articles/",         "category": "Tech News"},
+    "Habr: МТС AI":         {"url": "https://habr.com/ru/rss/companies/mts_ai/articles/",         "category": "AI & ML"},
+    "Habr: МТС Web Services":{"url": "https://habr.com/ru/rss/companies/mws/articles/",           "category": "Cloud & DevOps"},
+    "Habr: Райффайзенбанк": {"url": "https://habr.com/ru/rss/companies/raiffeisenbank/articles/", "category": "Case Studies"},
+    "Habr: Газпромбанк":    {"url": "https://habr.com/ru/rss/companies/gazprombank/articles/",    "category": "Case Studies"},
+    "Habr: Билайн Cloud":   {"url": "https://habr.com/ru/rss/companies/beeline_cloud/articles/",  "category": "Cloud & DevOps"},
+    "Habr: X5 Tech":        {"url": "https://habr.com/ru/rss/companies/x5tech/articles/",         "category": "Case Studies"},
+    "Habr: ЦИАН":           {"url": "https://habr.com/ru/rss/companies/cian/articles/",           "category": "Case Studies"},
+    "Habr: Точка":          {"url": "https://habr.com/ru/rss/companies/tochka/articles/",         "category": "Case Studies"},
+    "Habr: Додо Пицца":     {"url": "https://habr.com/ru/rss/companies/dododev/articles/",        "category": "Case Studies"},
+    "Habr: Redmadrobot":    {"url": "https://habr.com/ru/rss/companies/redmadrobot/articles/",    "category": "Engineering"},
+    "Habr: Simbirsoft":     {"url": "https://habr.com/ru/rss/companies/simbirsoft/articles/",     "category": "Engineering"},
+    "Habr: OTUS":           {"url": "https://habr.com/ru/rss/companies/otus/articles/",           "category": "Engineering"},
+    "Habr: YADRO":          {"url": "https://habr.com/ru/rss/companies/yadro/articles/",          "category": "Engineering"},
+    "Habr: Jet Infosystems": {"url": "https://habr.com/ru/rss/companies/jetinfosystems/articles/","category": "Engineering"},
+    "Habr: Олег Бунин":     {"url": "https://habr.com/ru/rss/companies/oleg-bunin/articles/",    "category": "Engineering"},
+    "Habr: CleverPumpkin":  {"url": "https://habr.com/ru/rss/companies/cleverpumpkin/articles/",  "category": "Engineering"},
+    "Habr: ODS":            {"url": "https://habr.com/ru/rss/companies/ods/articles/",            "category": "Data"},
+    "Habr: Редакция":       {"url": "https://habr.com/ru/rss/companies/habr/articles/",           "category": "Tech News"},
 
-    # "Slack Design": "https://slack.design/feed/",
-    # "Slack blog": "",
+    # ══════════════════════════════════════════════════════════════
+    # GITHUB
+    # ══════════════════════════════════════════════════════════════
 
-    # "GitLab Blog": "https://about.gitlab.com/atom.xml",
-    # "GitLab Releases": "https://about.gitlab.com/releases.xml",
+    "GitHub: Insights":           {"url": "https://github.blog/news-insights/feed/",         "category": "Tech News"},
+    "GitHub: AI & ML":            {"url": "https://github.blog/ai-and-ml/feed/",             "category": "AI & ML"},
+    "GitHub: Developer Skills":   {"url": "https://github.blog/developer-skills/feed/",      "category": "Engineering"},
+    "GitHub: Engineering":        {"url": "https://github.blog/engineering/feed/",            "category": "Engineering"},
+    "GitHub: Open Source":        {"url": "https://github.blog/open-source/feed/",           "category": "Engineering"},
+    "GitHub: Security":           {"url": "https://github.blog/security/feed/",              "category": "Security"},
+    "GitHub: Enterprise":         {"url": "https://github.blog/enterprise-software/feed/",   "category": "Tools"},
 
-    # "Figma": "https://www.figma.com/blog/feed/atom.xml",
+    # ══════════════════════════════════════════════════════════════
+    # GOOGLE
+    # ══════════════════════════════════════════════════════════════
 
-    # "Яндекс Cloud": "https://yandex.cloud/ru/feed.atom",
+    "Google Blog":                {"url": "https://blog.google/rss/",                                                         "category": "Tech News"},
+    "Google DeepMind":            {"url": "https://deepmind.google/blog/rss.xml",                                             "category": "AI & ML"},
+    "Google Research":            {"url": "https://research.google/blog/rss/",                                                "category": "AI & ML"},
+    "Google Developers":          {"url": "https://developers.googleblog.com/feeds/posts/default/?alt=rss",                   "category": "Engineering"},
+    "Google Workspace":           {"url": "https://blog.google/products-and-platforms/products/workspace/rss/",               "category": "Tools"},
+    "Google Ads & Commerce":      {"url": "https://blog.google/products/ads-commerce/rss/",                                  "category": "Tools"},
 
-    "Сбербанк": "https://sberbs.ru/blogs/blog.atom",
-    
-    # "VK Tech": "",
-    # "Ozon Tech": "",
-    # "Wb Tech": "",
-    # "Raiffeisenbank": "",
+    "Google Cloud: AI & ML":                  {"url": "https://cloudblog.withgoogle.com/products/ai-machine-learning/rss/",          "category": "AI & ML"},
+    "Google Cloud: Application Development":  {"url": "https://cloudblog.withgoogle.com/products/application-development/rss/",      "category": "Engineering"},
+    "Google Cloud: API Management":           {"url": "https://cloudblog.withgoogle.com/products/api-management/rss/",               "category": "Cloud & DevOps"},
+    "Google Cloud: Application Modernization":{"url": "https://cloudblog.withgoogle.com/products/application-modernization/rss/",    "category": "Cloud & DevOps"},
+    "Google Cloud: Compute":                  {"url": "https://cloudblog.withgoogle.com/products/compute/rss/",                      "category": "Cloud & DevOps"},
+    "Google Cloud: Containers & Kubernetes":  {"url": "https://cloudblog.withgoogle.com/products/containers-kubernetes/rss/",        "category": "Cloud & DevOps"},
+    "Google Cloud: DevOps & SRE":             {"url": "https://cloudblog.withgoogle.com/products/devops-sre/rss/",                   "category": "Cloud & DevOps"},
+    "Google Cloud: Infrastructure":           {"url": "https://cloudblog.withgoogle.com/products/infrastructure/rss/",               "category": "Cloud & DevOps"},
+    "Google Cloud: Infrastructure Modernization": {"url": "https://cloudblog.withgoogle.com/products/infrastructure-modernization/rss/", "category": "Cloud & DevOps"},
+    "Google Cloud: Chrome Enterprise":        {"url": "https://cloudblog.withgoogle.com/products/chrome-enterprise/rss/",            "category": "Tools"},
+    "Google Cloud: Data Analytics":           {"url": "https://cloudblog.withgoogle.com/products/data-analytics/rss/",               "category": "Data"},
+    "Google Cloud: Databases":                {"url": "https://cloudblog.withgoogle.com/products/databases/rss/",                    "category": "Data"},
+    "Google Cloud: Storage & Data Transfer":  {"url": "https://cloudblog.withgoogle.com/products/storage-data-transfer/rss/",        "category": "Data"},
+    "Google Cloud: Threat Intelligence":      {"url": "https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/",            "category": "Security"},
+    "Google Cloud: Startups":                 {"url": "https://cloudblog.withgoogle.com/topics/startups/rss/",                      "category": "Case Studies"},
 
+    # ══════════════════════════════════════════════════════════════
+    # MICROSOFT AZURE
+    # ══════════════════════════════════════════════════════════════
+
+    "Microsoft Azure: Blog":             {"url": "https://azure.microsoft.com/en-us/blog/feed/",                                       "category": "Cloud & DevOps"},
+    "Microsoft Azure: AI":               {"url": "https://azure.microsoft.com/en-us/blog/audience/ai-professionals/feed/",             "category": "AI & ML"},
+    "Microsoft Azure: Data":             {"url": "https://azure.microsoft.com/en-us/blog/audience/data-professionals/feed/",           "category": "Data"},
+    "Microsoft Azure: Developers":       {"url": "https://azure.microsoft.com/en-us/blog/audience/developers/feed/",                   "category": "Engineering"},
+    "Microsoft Azure: IT Implementors":  {"url": "https://azure.microsoft.com/en-us/blog/audience/it-implementors/feed/",              "category": "Cloud & DevOps"},
+    "Microsoft Azure: Business":         {"url": "https://azure.microsoft.com/en-us/blog/audience/business-decision-makers/feed/",     "category": "Management"},
+    "Microsoft Azure: Best Practices":   {"url": "https://azure.microsoft.com/en-us/blog/content-type/best-practices/feed/",           "category": "Cloud & DevOps"},
+    "Microsoft Azure: Customer Stories": {"url": "https://azure.microsoft.com/en-us/blog/content-type/customer-stories/feed/",         "category": "Case Studies"},
+
+    # ══════════════════════════════════════════════════════════════
+    # ATLASSIAN
+    # ══════════════════════════════════════════════════════════════
+
+    # Engineering
+    # Темы (новая структура блога, 2025)
+    "Atlassian: Leadership":    {"url": "https://www.atlassian.com/blog/topic/leadership/rss",   "category": "Management"},
+    "Atlassian: Teamwork":      {"url": "https://www.atlassian.com/blog/topic/teamwork/rss",     "category": "Management"},
+    "Atlassian: Innovation":    {"url": "https://www.atlassian.com/blog/topic/innovation/rss",   "category": "Management"},
+    "Atlassian: Development":   {"url": "https://www.atlassian.com/blog/topic/development/rss",  "category": "Engineering"},
+    "Atlassian: How We Build":  {"url": "https://www.atlassian.com/blog/topic/how-we-build/rss", "category": "Engineering"},
+    "Atlassian: AI Research":   {"url": "https://www.atlassian.com/blog/ai-research/rss",        "category": "AI & ML"},
+
+    # Продукты
+    "Atlassian: Jira":                    {"url": "https://www.atlassian.com/blog/app/jira/rss",                    "category": "Tools"},
+    "Atlassian: Confluence":              {"url": "https://www.atlassian.com/blog/app/confluence/rss",              "category": "Tools"},
+    "Atlassian: Trello":                  {"url": "https://www.atlassian.com/blog/app/trello/rss",                  "category": "Tools"},
+    "Atlassian: Bitbucket":               {"url": "https://www.atlassian.com/blog/app/bitbucket/rss",               "category": "Engineering"},
+    "Atlassian: Loom":                    {"url": "https://www.atlassian.com/blog/app/loom/rss",                    "category": "Tools"},
+    "Atlassian: Jira Service Management": {"url": "https://www.atlassian.com/blog/app/jira-service-management/rss", "category": "Tools"},
+
+    # ══════════════════════════════════════════════════════════════
+    # TOPTAL
+    # ══════════════════════════════════════════════════════════════
+
+    "Toptal: Project Management":     {"url": "https://www.toptal.com/project-managers/blog.rss",       "category": "Management"},
+    "Toptal: Product Management":     {"url": "https://www.toptal.com/product-managers/blog.rss",        "category": "Management"},
+    "Toptal: Management Consulting":  {"url": "https://www.toptal.com/management-consultants/blog.rss",  "category": "Management"},
+    "Toptal: Engineering":            {"url": "https://www.toptal.com/developers/blog.rss",              "category": "Engineering"},
+
+    # ══════════════════════════════════════════════════════════════
+    # ENGINEERING BLOGS
+    # ══════════════════════════════════════════════════════════════
+
+    "The Pragmatic Engineer": {"url": "https://blog.pragmaticengineer.com/rss/",                         "category": "Engineering"},
+    "Meta Engineering":       {"url": "https://engineering.fb.com/feed/",                                "category": "Engineering"},
+    "Stripe Blog":            {"url": "https://stripe.com/blog/feed.rss",                               "category": "Engineering"},
+    "Cloudflare Blog":        {"url": "https://blog.cloudflare.com/rss/",                               "category": "Engineering"},
+    "GitLab Blog":            {"url": "https://about.gitlab.com/atom.xml",                              "category": "Engineering"},
+    "GitLab Releases":        {"url": "https://about.gitlab.com/releases.xml",                          "category": "Tech News"},
+    "CSS-Tricks":             {"url": "https://feeds.feedburner.com/CssTricks",                         "category": "Engineering"},
+
+    # ══════════════════════════════════════════════════════════════
+    # AI & ML
+    # ══════════════════════════════════════════════════════════════
+
+    "Nvidia Developer Blog":  {"url": "https://developer.nvidia.com/blog/feed",      "category": "AI & ML"},
+    "BAIR Blog":              {"url": "http://bair.berkeley.edu/blog/feed.xml",       "category": "AI & ML"},
+    "Amazon Science":         {"url": "https://www.amazon.science/index.rss",         "category": "AI & ML"},
+    # "OpenAI Engineering":   {"url": "https://openai.com/news/engineering/rss.xml",  "category": "AI & ML"},  # нужен VPN
+    # "OpenAI News":          {"url": "https://openai.com/news/rss.xml",              "category": "AI & ML"},  # нужен VPN
+
+    # ══════════════════════════════════════════════════════════════
+    # AWS (нужен VPN из России)
+    # ══════════════════════════════════════════════════════════════
+
+    # "AWS: Blog":                 {"url": "https://aws.amazon.com/ru/blogs/aws/feed/",                              "category": "Tech News"},
+    # "AWS: Insights":             {"url": "https://aws.amazon.com/ru/blogs/aws-insights/feed/",                    "category": "Tech News"},
+    # "AWS: DevOps":               {"url": "https://aws.amazon.com/ru/blogs/devops/feed/",                          "category": "Cloud & DevOps"},
+    # "AWS: Infrastructure":       {"url": "https://aws.amazon.com/ru/blogs/infrastructure-and-automation/feed/",   "category": "Cloud & DevOps"},
+    # "AWS: Open Source":          {"url": "https://aws.amazon.com/ru/blogs/opensource/feed/",                      "category": "Engineering"},
+    # "AWS: Business Intelligence":{"url": "https://aws.amazon.com/ru/blogs/business-intelligence/feed/",           "category": "Data"},
+
+    # ══════════════════════════════════════════════════════════════
+    # TECH MEDIA
+    # ══════════════════════════════════════════════════════════════
+
+    "MIT Technology Review":  {"url": "https://www.technologyreview.com/feed",         "category": "Tech News"},
+    "Hacker News":            {"url": "http://news.ycombinator.com/rss",               "category": "Tech News"},
+    "TechCrunch Startups":    {"url": "https://techcrunch.com/category/startups/feed/",  "category": "Tech News"},
+    "The Verge":              {"url": "http://www.theverge.com/rss/full.xml",           "category": "Tech News"},
+    "Forbes Entrepreneurs":   {"url": "https://www.forbes.com/innovation/feed/",          "category": "Management"},
+    "Product Hunt":           {"url": "http://www.producthunt.com/feed",                "category": "Tools"},
+
+    # ══════════════════════════════════════════════════════════════
+    # DESIGN
+    # ══════════════════════════════════════════════════════════════
+
+    "UX Planet":    {"url": "https://uxplanet.org/feed",               "category": "Design"},
+    "Slack Design": {"url": "https://slack.design/feed/",              "category": "Design"},
+    "Figma Blog":   {"url": "https://www.figma.com/blog/feed/atom.xml","category": "Design"},
+
+    # ══════════════════════════════════════════════════════════════
+    # TOOLS
+    # ══════════════════════════════════════════════════════════════
+
+    "Grammarly Blog": {"url": "https://www.grammarly.com/blog/feed/", "category": "Tools"},
+
+    # ══════════════════════════════════════════════════════════════
+    # РОССИЙСКИЕ
+    # ══════════════════════════════════════════════════════════════
+
+    "Сбербанк":     {"url": "https://sberbs.ru/blogs/blog.atom",    "category": "Case Studies"},
 }
+
+# Описания источников для каталога (ключ — домен)
+RSS_SOURCE_DESCRIPTIONS = {
+    "www.atlassian.com":                    "Всё о продуктивности команд и инструментах для совместной работы.",
+    "cloudblog.withgoogle.com":             "Как проектировать, масштабировать и защищать облачные системы.",
+    "azure.microsoft.com":                  "Облачные решения для разработчиков и бизнеса.",
+    "github.blog":                          "Жизнь разработчика: инструменты, тренды, культура.",
+    "www.toptal.com":                       "Опыт лучших специалистов в управлении и разработке продуктов.",
+    "blog.google":                          "Что делает Google и куда движутся технологии.",
+    "news.ycombinator.com":                 "Самое обсуждаемое в мире технологий и стартапов.",
+    "techcrunch.com":                       "Новости стартапов, венчурных инвестиций и технологий.",
+    "www.forbes.com":                       "Истории предпринимателей и бизнес-инсайты.",
+    "www.theverge.com":                     "Технологии, наука и культура — взгляд редакции.",
+    "www.producthunt.com":                  "Лучшие новые продукты и инструменты каждый день.",
+    "blog.pragmaticengineer.com":           "Карьера и технологии — взгляд изнутри крупных компаний.",
+    "engineering.fb.com":                   "Как Meta решает инженерные задачи в масштабе миллиардов пользователей.",
+    "stripe.com":                           "Инжиниринг платёжной инфраструктуры от команды Stripe.",
+    "blog.cloudflare.com":                  "Сети, безопасность и производительность интернета.",
+    "shopifyengineering.myshopify.com":     "Как Shopify строит платформу для миллионов магазинов.",
+    "feeds.feedburner.com":                 "Советы и приёмы фронтенд-разработки.",
+    "developer.nvidia.com":                 "GPU-вычисления, CUDA и нейросети от Nvidia.",
+    "bair.berkeley.edu":                    "Исследования в области ИИ от Беркли.",
+    "www.amazon.science":                   "Научные публикации и исследования команд Amazon.",
+    "uxplanet.org":                         "UX-дизайн: паттерны, кейсы и практические советы.",
+    "slack.design":                         "Дизайн-процесс и система дизайна команды Slack.",
+    "www.mindtheproduct.com":               "Продуктовый менеджмент: методологии, кейсы, карьера.",
+    "www.grammarly.com":                    "NLP, продуктовые решения и инженерия от команды Grammarly.",
+}
+
+
+def get_feed_urls() -> dict:
+    """Возвращает {name: url} — формат для rss_parser и других мест где категория не нужна."""
+    return {name: feed["url"] if isinstance(feed, dict) else feed for name, feed in RSS_FEEDS.items()}
+
 
 # Источники, в которых в RSS в summary приходит полный текст статьи; обрезаем до SUMMARY_TRUNCATE_MAX_CHARS (~128 токенов)
 SUMMARY_TRUNCATE_SOURCE_PREFIXES = ("Google Cloud", "GitLab Blog", "Сбербанк",  "GitLab Releases")
@@ -251,7 +340,10 @@ EMBED_RELEVANT_THRESHOLD = 0.35
 DEFAULT_EMBED_BATCH_SIZE = 32  # Размер батча для обработки эмбеддингов
 
 # Эмбеддинги: модель
-EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+# LaBSE — мультиязычная, 768d, 512 токенов (vs 128 у paraphrase-multilingual-mpnet-base-v2)
+EMBEDDING_MODEL_NAME = "sentence-transformers/LaBSE"
+# Старая модель (128 токенов — чанки обрезались, качество эмбеддингов снижено):
+# EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 
 # Rerank для QA: cross-encoder (можно заменить на мультиязычный аналог при необходимости)
 QA_RERANK_MODEL_NAME = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
@@ -262,7 +354,7 @@ DEFAULT_TEXT_EXTRACTION_SLEEP = 2.0  # Задержка между попытк�
 DEFAULT_TEXT_MIN_LENGTH = 300  # Минимальная длина текста для успешного извлечения
 
 # GigaChat: конфигурация
-GIGACHAT_CREDENTIALS = "MDE5OTUyOTgtMWZmMC03NjRjLWI4ZTQtODRkZTMwNmNhMTJjOjE1NmFiNTUzLTExYjItNDRmZi1hMWJiLTZhMWUzZmM5M2YyNg=="
+GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
 GIGACHAT_MODEL = "GigaChat"  # Модель GigaChat
 GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
 
@@ -272,12 +364,13 @@ GIGACHAT_VERIFY_SSL = False  # Проверка SSL сертификатов
 GIGACHAT_SUMMARIZATION_ENABLED: bool = (
     os.environ.get("GIGACHAT_SUMMARIZATION_ENABLED", "true").strip().lower() != "false"
 )
-GIGACHAT_SUMMARIZATION_ENABLED = False
 
 # BART fallback: модель для суммаризации когда GigaChat недоступен.
-# facebook/bart-large-cnn  — английский, ~1.6 GB, высокое качество (по умолчанию)
-# IlyaGusev/mbart_ru_sum_gazeta — русский, ~900 MB (раскомментируй для RU-статей)
-BART_SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
+# sshleifer/distilbart-cnn-6-6 — английский, ~400 MB, ~90% качества bart-large-cnn, в 2 раза быстрее
+# facebook/bart-large-cnn      — английский, ~1.6 GB, высокое качество
+# cointegrated/rut5-base-absum   — русский, ~250 MB, T5-based, в ~10x быстрее mBART на CPU (используется автоматически для RU-статей)
+# IlyaGusev/mbart_ru_sum_gazeta  — русский, ~2.3 GB, mBART, высокое качество но крайне медленный на CPU (~50 мин/статья)
+BART_SUMMARIZATION_MODEL = "sshleifer/distilbart-cnn-6-6"
 BART_SUMMARY_MAX_LENGTH = 130   # токенов в резюме
 BART_SUMMARY_MIN_LENGTH = 40    # токенов минимум
 
@@ -293,23 +386,27 @@ DEFAULT_LLM_SLEEP = 1.5  # Задержка между запросами к LLM
 POSTGRES_ENABLED = True  # Можно отключить БД, если она недоступна
 
 # Базовые параметры подключения (заполни под свою локальную БД)
-POSTGRES_HOST = "localhost"
-POSTGRES_PORT = 5432
-POSTGRES_DB = "postgres"
-POSTGRES_USER = "macbookpro"
-POSTGRES_PASSWORD = ""
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.environ.get("POSTGRES_PORT", "5432"))
+POSTGRES_DB = os.environ.get("POSTGRES_DB", "postgres")
+# По умолчанию — текущий пользователь macOS/Linux (как у Homebrew Postgres). Переопределение: POSTGRES_USER=...
+POSTGRES_USER = os.environ.get("POSTGRES_USER") or getpass.getuser()
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "")
 
 # Имена таблиц для состояния краулера и RAG-коллекций
 POSTGRES_TABLE_PROCESSED_ARTICLES = "processed_articles"
 POSTGRES_TABLE_FEED_STATE = "last_published_at"
 POSTGRES_TABLE_COLLECTIONS = "collections"
 POSTGRES_TABLE_RAG_DOCUMENTS = "rag_documents"
+POSTGRES_TABLE_BERTOPIC_ASSIGNMENTS = "bertopic_assignments"
+POSTGRES_TABLE_INBOX_ARTICLES = "inbox_articles"
 
 # Размерность вектора эмбеддингов (paraphrase-multilingual-mpnet-base-v2 = 768)
 EMBEDDING_DIM = 768
 
 # RAG-чанкирование: размер чанка и перекрытие (в токенах)
-RAG_CHUNK_MAX_TOKENS = 128
+# LaBSE поддерживает 256 токенов (vs 128 у paraphrase-multilingual-mpnet-base-v2)
+RAG_CHUNK_MAX_TOKENS = 256
 RAG_CHUNK_OVERLAP_TOKENS = 50
 
 # Дайджест (4 раздела без графа): кластеризация + LLM-описание/классификация
@@ -318,4 +415,23 @@ DIGEST_MAX_ITEMS_PER_SECTION = 5  # макс. кластеров в каждом
 DIGEST_MAX_ARTICLES_PER_CLUSTER = 3  # макс. статей (по link) в блоке
 DIGEST_LLM_LANGUAGE = "ru"  # "ru" | "en"
 DIGEST_TYPICAL_CHUNKS_PER_CLUSTER = 5  # сколько чанков отдавать в LLM для описания кластера
+
+# JWT-аутентификация
+JWT_SECRET = os.environ.get("JWT_SECRET", "atlas-dev-secret-change-in-prod")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_DAYS = 7
+
+# CORS: допустимые origins (через запятую в env)
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000"
+).split(",")
+
+# Ограничение регистрации: список разрешённых email через запятую.
+# Если пустая строка — регистрация открыта (локальная разработка).
+# Пример: ALLOWED_EMAILS=user1@example.com,user2@example.com
+_raw = os.environ.get("ALLOWED_EMAILS", "").strip()
+ALLOWED_EMAILS: set[str] = (
+    {e.strip().lower() for e in _raw.split(",") if e.strip()}
+    if _raw else set()
+)
 

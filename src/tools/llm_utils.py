@@ -63,7 +63,7 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
     Суммаризация через facebook/bart-large-cnn (fallback).
 
     BART — английская модель, результат на том же языке что и входной текст.
-    Для русских статей используйте IlyaGusev/mbart_ru_sum_gazeta (см. config.py).
+    Для русских статей используется cointegrated/rut5-base-absum (см. text_extraction_worker.py).
 
     Args:
         title: Заголовок статьи (добавляется к тексту для контекста).
@@ -81,29 +81,50 @@ def _summarize_with_bart(title: str, text: str, max_chars: int = 4000) -> str:
 
     result = bart(
         combined,
-        max_length=BART_SUMMARY_MAX_LENGTH,
-        min_length=BART_SUMMARY_MIN_LENGTH,
+        max_new_tokens=BART_SUMMARY_MAX_LENGTH,
+        min_new_tokens=BART_SUMMARY_MIN_LENGTH,
         do_sample=False,
     )
     return result[0]["summary_text"].strip()
 
 
-def create_gigachat_client() -> GigaChat:
+def create_gigachat_client(credentials: Optional[str] = None, model: Optional[str] = None) -> GigaChat:
     """
     Создает новый клиент GigaChat.
-    
+
+    FastAPI запускает синхронные эндпоинты в AnyIO worker thread, где нет
+    event loop. GigaChat при инициализации вызывает asyncio.get_event_loop()
+    внутри — создаём loop вручную если его нет.
+
+    Args:
+        credentials: API-ключ GigaChat. Если не передан — поднимает ValueError.
+        model: Модель GigaChat. Если не передан — использует GIGACHAT_MODEL из конфига.
+
     Returns:
         Экземпляр GigaChat
-        
+
     Raises:
+        ValueError: Если credentials не переданы
         RuntimeError: Если не удалось создать клиент
     """
+    if credentials is None:
+        raise ValueError("GigaChat не настроен. Укажите credentials в профиле.")
+
+    import asyncio
     try:
-        logger.info(f"Инициализация GigaChat клиента (модель: {GIGACHAT_MODEL})...")
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+    effective_model = model or GIGACHAT_MODEL
+
+    try:
+        logger.info(f"Инициализация GigaChat клиента (модель: {effective_model})...")
         client = GigaChat(
-            credentials=GIGACHAT_CREDENTIALS,
+            credentials=credentials,
             verify_ssl_certs=GIGACHAT_VERIFY_SSL,
-            model=GIGACHAT_MODEL,
+            model=effective_model,
+            timeout=120,  # 2 мин — после этого GigaChat считается зависшим
         )
         logger.info("✅ GigaChat клиент инициализирован")
         return client
@@ -232,6 +253,172 @@ def summarize_article(
     except Exception as e:
         logger.error("BART fallback тоже недоступен для '%s': %s", title[:50], e)
         return "Ошибка при суммаризации статьи (GigaChat и BART недоступны)."
+
+
+FEED_CATEGORIES = [
+    "AI & ML",
+    "Engineering",
+    "Cloud & DevOps",
+    "Data",
+    "Security",
+    "Design",
+    "Tools",
+    "Management",
+    "Tech News",
+    "Case Studies",
+]
+
+
+def suggest_feed_category(name: str, description: str, url: str, credentials: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
+    """
+    Определяет категорию RSS-ленты через GigaChat.
+
+    Используется при добавлении ленты пользователем вручную — предлагает категорию
+    которую пользователь может принять или изменить.
+
+    Args:
+        name: Название ленты (из тега <title> RSS-фида).
+        description: Описание ленты (из тега <description> или <subtitle>).
+        url: URL ленты — используется как дополнительный контекст.
+
+    Returns:
+        Название категории из FEED_CATEGORIES или None если GigaChat недоступен.
+    """
+    try:
+        categories_list = "\n".join(f"- {c}" for c in FEED_CATEGORIES)
+        prompt = (
+            f"Определи категорию для RSS-ленты. Выбери одну категорию из списка ниже.\n\n"
+            f"Лента:\n"
+            f"- Название: {name}\n"
+            f"- Описание: {description or 'не указано'}\n"
+            f"- URL: {url}\n\n"
+            f"Доступные категории:\n{categories_list}\n\n"
+            f"Ответь одной строкой — только названием категории из списка, без пояснений."
+        )
+        client = create_gigachat_client(credentials=credentials, model=model)
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.0,
+                    max_tokens=20,
+                )
+            )
+        result = response.choices[0].message.content.strip()
+        # Проверяем что ответ входит в список категорий
+        if result in FEED_CATEGORIES:
+            return result
+        # Пробуем найти частичное совпадение
+        for cat in FEED_CATEGORIES:
+            if cat.lower() in result.lower() or result.lower() in cat.lower():
+                return cat
+        logger.warning("GigaChat вернул неизвестную категорию: '%s'", result)
+        return None
+    except Exception as e:
+        logger.warning("Не удалось определить категорию через GigaChat: %s", e)
+        return None
+
+
+def generate_feed_description(name: str, url: str, titles: list, credentials: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
+    """
+    Генерирует описание RSS-ленты на русском языке на основе заголовков последних статей.
+
+    Args:
+        name: Название ленты.
+        url: URL ленты — используется как дополнительный контекст.
+        titles: Список заголовков последних статей (до 10).
+
+    Returns:
+        Описание ленты одним предложением на русском или None если GigaChat недоступен.
+    """
+    if not titles:
+        return None
+    try:
+        titles_text = "\n".join(f"- {t}" for t in titles[:10])
+        prompt = (
+            f"Напиши описание RSS-ленты одним коротким предложением на русском языке.\n"
+            f"Описание должно объяснять о чём эта лента — какие темы она освещает.\n"
+            f"Не упоминай название ленты в описании.\n\n"
+            f"Лента: {name}\n"
+            f"URL: {url}\n\n"
+            f"Последние заголовки статей:\n{titles_text}\n\n"
+            f"Ответь только одним предложением, без пояснений."
+        )
+        client = create_gigachat_client(credentials=credentials, model=model)
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.3,
+                    max_tokens=100,
+                )
+            )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning("Не удалось сгенерировать описание ленты через GigaChat: %s", e)
+        return None
+
+
+def generate_feed_descriptions_batch(feeds: list) -> dict:
+    """
+    Генерирует описания для нескольких лент за один LLM-вызов.
+
+    Args:
+        feeds: Список словарей {"id": int, "name": str, "url": str, "titles": List[str]}
+
+    Returns:
+        Словарь {feed_id: description} для лент где удалось сгенерировать описание.
+    """
+    if not feeds:
+        return {}
+    try:
+        feeds_text = ""
+        for i, feed in enumerate(feeds, 1):
+            titles_text = "\n".join(f"  - {t}" for t in feed["titles"][:10])
+            feeds_text += (
+                f"Лента {i}:\n"
+                f"  Название: {feed['name']}\n"
+                f"  URL: {feed['url']}\n"
+                f"  Заголовки статей:\n{titles_text}\n\n"
+            )
+        prompt = (
+            f"Для каждой ленты напиши описание одним коротким предложением на русском языке.\n"
+            f"Описание должно объяснять о чём лента — какие темы она освещает.\n"
+            f"Не упоминай название ленты в описании.\n\n"
+            f"{feeds_text}"
+            f"Ответь строго в формате JSON-массива:\n"
+            f'[{{"index": 1, "description": "..."}}, {{"index": 2, "description": "..."}}, ...]'
+        )
+        from config.config import GIGACHAT_CREDENTIALS, GIGACHAT_MODEL
+        client = create_gigachat_client(credentials=GIGACHAT_CREDENTIALS, model=GIGACHAT_MODEL)
+        with client:
+            from gigachat.models import Chat, Messages, MessagesRole
+            response = client.chat(
+                Chat(
+                    messages=[Messages(role=MessagesRole.USER, content=prompt)],
+                    temperature=0.3,
+                    max_tokens=2000,
+                )
+            )
+        import json, re
+        raw = response.choices[0].message.content.strip()
+        # Вырезаем JSON из ответа если обёрнут в markdown
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if not match:
+            logger.warning("generate_feed_descriptions_batch: не удалось найти JSON в ответе")
+            return {}
+        items = json.loads(match.group())
+        result = {}
+        for item in items:
+            idx = item.get("index", 0) - 1
+            if 0 <= idx < len(feeds) and item.get("description"):
+                result[feeds[idx]["id"]] = item["description"].strip()
+        return result
+    except Exception as e:
+        logger.warning("generate_feed_descriptions_batch: ошибка GigaChat: %s", e)
+        return {}
 
 
 def format_summary_text(summary: str, width: int = 100) -> str:

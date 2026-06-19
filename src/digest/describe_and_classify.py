@@ -59,15 +59,16 @@ def _build_cluster_prompt(chunk_texts: List[str], language: str = "ru") -> list[
     else:
         system_msg = (
             "Ты анализируешь группы фрагментов статей для дайджеста. Ответь ровно тремя строками:\n"
-            "1) TITLE: короткий заголовок в 3–7 словах (например: «Продуктовые инженеры и ИИ»).\n"
-            "2) DESCRIPTION: 2–3 предложения об общей теме.\n"
+            "1) TITLE: короткий заголовок на русском языке в 3–7 словах (например: «Продуктовые инженеры и ИИ»).\n"
+            "2) DESCRIPTION: 2–3 предложения на русском языке об общей теме.\n"
             "3) TYPE: ровно одно слово — trend, method, tool или case_study.\n\n"
+            "Важно: TITLE и DESCRIPTION всегда пиши на русском языке, даже если статьи на английском.\n\n"
             f"{type_rubric_ru}"
         )
         user_msg = (
             "Фрагменты из одного кластера:\n\n"
             f"{context}\n\n"
-            "Дай TITLE (3–7 слов), DESCRIPTION (2–3 предложения), TYPE (одно: trend, method, tool, case_study)."
+            "Дай TITLE (3–7 слов, на русском), DESCRIPTION (2–3 предложения, на русском), TYPE (одно: trend, method, tool, case_study)."
         )
 
     return [

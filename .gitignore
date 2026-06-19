@@ -9,12 +9,14 @@ venv/
 ENV/
 .venv
 
-# Результаты работы (CSV в outputs игнорируются)
-outputs/*.csv
+# Результаты работы
+outputs/
+models/
+bertopic_output_2/
 *.xlsx
 *.parquet
 
-# Исключения для конфигурационных файлов (таксономия — основной источник ключевых слов)
+# Исключения для конфигурационных файлов
 !data/taxonomy.json
 
 # IDE
@@ -28,5 +30,14 @@ outputs/*.csv
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
+# Node
+node_modules/
+dist/
+.env
+.env.local
+*.log
+
+# Frontend build output
+docs/
+frontend/README-HANDOFF.md
+frontend/guidelines/

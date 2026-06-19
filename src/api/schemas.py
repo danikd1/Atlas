@@ -5,7 +5,54 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
+
+
+# ─── Auth ──────────────────────────────────────────────────────────────────
+
+
+class AuthRegister(BaseModel):
+    email: EmailStr = Field(..., description="Email пользователя")
+    password: str = Field(..., min_length=8, description="Пароль (мин. 8 символов)")
+
+
+class AuthLogin(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class UserInfo(BaseModel):
+    id: int
+    email: str
+    created_at: Optional[datetime] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8)
+
+
+# ─── Router ──────���─────────────────────────────────────────────────────────
 
 
 class RouterRequest(BaseModel):
@@ -125,49 +172,6 @@ class RssCollectResponse(BaseModel):
     )
 
 
-class PipelineRunRequest(BaseModel):
-    """Параметры запуска пайплайна обработки статей (фильтрация, эмбеддинги, суммаризация, RAG).
-
-    RSS-сбор в этом эндпоинте НЕ выполняется — используйте POST /api/rss/collect
-    для обновления данных из источников.
-    """
-
-    taxonomy_selection: Optional[Dict[str, Optional[str]]] = Field(
-        default=None,
-        description="Узел таксономии для фильтрации (discipline, ga, activity). Если не передан, используется конфигурация по умолчанию.",
-        examples=[{"discipline": "Engineering", "ga": "DevOps", "activity": None}],
-    )
-    collection_name: Optional[str] = Field(
-        default=None,
-        description="Название создаваемой коллекции. Если не указано, генерируется автоматически на основе таксономии.",
-        examples=["DevOps практики"],
-    )
-
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "taxonomy_selection": {"discipline": "Engineering", "ga": "DevOps", "activity": None},
-                "collection_name": "DevOps практики",
-            }
-        }
-    }
-
-
-class PipelineRunResponse(BaseModel):
-    """Результат выполнения пайплайна."""
-
-    success: bool = Field(description="Признак успешного завершения пайплайна.")
-    articles_count: int = Field(
-        default=0,
-        description="Количество статей, прошедших все этапы фильтрации и сохранённых в базу знаний.",
-        examples=[42],
-    )
-    message: str = Field(
-        default="",
-        description="Человекочитаемое сообщение о результате выполнения.",
-        examples=["Пайплайн завершён. Обработано статей: 42."],
-    )
-
 
 class QARequest(BaseModel):
     """Запрос к Q&A-ассистенту по конкретной коллекции."""
@@ -238,6 +242,7 @@ class CollectionItem(BaseModel):
 
     id: int = Field(description="Уникальный идентификатор коллекции.", examples=[3])
     name: str = Field(description="Название коллекции.", examples=["DevOps практики"])
+    description: Optional[str] = Field(default=None, description="Краткое описание коллекции.", examples=["Статьи о гибких методологиях разработки: Agile, Scrum, спринты."])
     discipline: Optional[str] = Field(default=None, description="Дисциплина (верхний уровень таксономии).", examples=["Engineering"])
     ga: Optional[str] = Field(default=None, description="Направление (второй уровень таксономии).", examples=["DevOps"])
     activity: Optional[str] = Field(default=None, description="Активность (третий уровень таксономии).", examples=["CI/CD"])
@@ -245,6 +250,7 @@ class CollectionItem(BaseModel):
     created_at: Optional[datetime] = Field(default=None, description="Дата и время создания коллекции.")
     updated_at: Optional[datetime] = Field(default=None, description="Дата и время последнего изменения.")
     last_refreshed_at: Optional[datetime] = Field(default=None, description="Дата и время последнего обновления данных коллекции пайплайном.")
+    article_count: Optional[int] = Field(default=None, description="Количество уникальных статей в коллекции.")
 
     model_config = {"from_attributes": True}
 
@@ -259,6 +265,229 @@ class CollectionArticle(BaseModel):
     published_at: Optional[datetime] = Field(default=None, description="Дата публикации статьи в источнике.")
 
 
+class FeedValidateRequest(BaseModel):
+    """Запрос на валидацию RSS-ленты по URL перед сохранением."""
+    url: str = Field(..., description="URL RSS-ленты для проверки.", examples=["https://habr.com/ru/rss/hubs/python/articles/"])
+    gigachat_credentials: Optional[str] = Field(default=None, description="API-ключ GigaChat для генерации описания и категории.")
+    gigachat_model: Optional[str] = Field(default=None)
+
+
+class FeedValidateResponse(BaseModel):
+    """Результат валидации RSS-ленты."""
+    valid: bool = Field(description="True если URL является рабочим RSS/Atom фидом.")
+    name: Optional[str] = Field(default=None, description="Название ленты из тега <title>.")
+    description: Optional[str] = Field(default=None, description="Описание ленты из тега <description>.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа сайта.")
+    suggested_category: Optional[str] = Field(default=None, description="Категория предложенная GigaChat — пользователь может изменить.")
+    error: Optional[str] = Field(default=None, description="Текст ошибки если valid=False.")
+
+
+class FeedCreate(BaseModel):
+    """Данные для создания новой подписки на ленту."""
+    url: str = Field(..., description="URL RSS-ленты.")
+    name: str = Field(..., description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа — берётся из ответа /validate.")
+    description: Optional[str] = Field(default=None, description="Описание ленты — берётся из ответа /validate.")
+    category: Optional[str] = Field(default=None, description="Категория ленты — берётся из suggested_category или задаётся пользователем вручную.")
+    folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели (опционально).")
+
+
+class FeedBatchCreate(BaseModel):
+    """Данные для массовой подписки на ленты."""
+    feeds: list[FeedCreate] = Field(..., description="Список лент для подписки.")
+
+
+class FeedItem(BaseModel):
+    """Лента пользователя — данные для отображения в боковой панели."""
+    id: int = Field(description="Уникальный ID ленты.")
+    url: str = Field(description="URL RSS-ленты.")
+    name: str = Field(description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    description: Optional[str] = Field(default=None, description="Описание ленты.")
+    category: Optional[str] = Field(default=None, description="Категория ленты.")
+    enabled: bool = Field(description="Активна ли лента (участвует ли в сборе).")
+    disabled_reason: Optional[str] = Field(default=None, description="Причина отключения: 'error' | 'quiet' | 'manual' | null.")
+    error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
+    last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз успешно обновлялась.")
+    last_error: Optional[str] = Field(default=None, description="Текст последней ошибки.")
+    folder_id: Optional[int] = Field(default=None, description="ID папки в боковой панели.")
+    hidden: bool = Field(default=False, description="Скрыта ли лента из боковой панели.")
+    unread_count: int = Field(default=0, description="Количество непрочитанных статей.")
+    created_at: Optional[datetime] = Field(default=None, description="Дата подписки пользователя.")
+
+    model_config = {"from_attributes": True}
+
+
+class FeedAddResponse(FeedItem):
+    """Ответ на POST /api/feeds — расширяет FeedItem результатом первого фетча."""
+    fetch_status: str = Field(description="Результат первого фетча: 'ok' | 'error' | 'quiet'.")
+    fetch_error: Optional[str] = Field(default=None, description="Текст ошибки (только при fetch_status='error').")
+
+
+class ArticleItem(BaseModel):
+    """Статья в списке ленты."""
+    id: int = Field(description="ID статьи в processed_articles.")
+    link: str = Field(description="URL оригинальной статьи.")
+    title: Optional[str] = Field(default=None, description="Заголовок статьи.")
+    summary: Optional[str] = Field(default=None, description="Краткое описание.")
+    published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
+    source: Optional[str] = Field(default=None, description="Название источника.")
+    feed_id: Optional[int] = Field(default=None, description="ID ленты в которой опубликована статья.")
+    is_read: bool = Field(default=False, description="Прочитана ли статья текущим пользователем.")
+    is_saved: bool = Field(default=False, description="Добавлена ли статья в закладки.")
+
+    model_config = {"from_attributes": True}
+
+
+class ArticleReadRequest(BaseModel):
+    """Запрос на пометку статьи прочитанной."""
+    link: str = Field(..., description="URL статьи.")
+
+
+class BookmarkRequest(BaseModel):
+    """Запрос на добавление/удаление закладки."""
+    link: str = Field(..., description="URL статьи.")
+
+
+class SummarizeRequest(BaseModel):
+    """Параметры запроса AI-резюме статьи."""
+    gigachat_credentials: Optional[str] = Field(default=None)
+    gigachat_model: Optional[str] = Field(default=None)
+
+
+class SummarizeResponse(BaseModel):
+    """Ответ эндпоинта суммаризации статьи."""
+    ai_summary: Optional[str] = Field(
+        default=None,
+        description="AI-резюме статьи (3–4 предложения). null если не удалось извлечь текст.",
+    )
+    cached: bool = Field(
+        default=False,
+        description="True если резюме было взято из кэша (БД), False если только что сгенерировано.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description="Описание ошибки. Присутствует если ai_summary=null.",
+    )
+
+
+class ArticleDetail(BaseModel):
+    """Полные данные статьи для Reader mode."""
+    id: int = Field(description="ID статьи в processed_articles.")
+    link: str = Field(description="URL оригинальной статьи.")
+    title: Optional[str] = Field(default=None, description="Заголовок статьи.")
+    summary: Optional[str] = Field(default=None, description="Краткое описание.")
+    full_text: Optional[str] = Field(default=None, description="Полный текст. null если извлечь не удалось.")
+    published_at: Optional[datetime] = Field(default=None, description="Дата публикации.")
+    source: Optional[str] = Field(default=None, description="Название источника.")
+    is_read: bool = Field(default=False, description="Прочитана ли статья.")
+    is_saved: bool = Field(default=False, description="Добавлена ли статья в закладки.")
+
+    model_config = {"from_attributes": True}
+
+
+class FeedUpdate(BaseModel):
+    """Изменяемые поля подписки на ленту."""
+    name: Optional[str] = Field(default=None, description="Новое название.")
+    enabled: Optional[bool] = Field(default=None, description="Включить или выключить ленту.")
+    folder_id: Optional[int] = Field(default=None, description="Переместить в папку (None = корень).")
+    hidden: Optional[bool] = Field(default=None, description="Скрыть ленту из боковой панели без отписки.")
+
+
+class FolderCreate(BaseModel):
+    """Данные для создания папки."""
+    name: str = Field(description="Название папки.")
+    favicon_url: Optional[str] = Field(default=None, description="Favicon для папок созданных из каталога.")
+
+
+class FolderItem(BaseModel):
+    """Папка пользователя в боковой панели."""
+    id: int
+    name: str
+    position: int = 0
+    favicon_url: Optional[str] = None
+    model_config = {"from_attributes": True}
+
+
+class FolderUpdate(BaseModel):
+    """Изменяемые поля папки."""
+    name: Optional[str] = Field(default=None, description="Новое название папки.")
+    position: Optional[int] = Field(default=None, description="Новая позиция в боковой панели.")
+
+
+class CatalogFeedItem(BaseModel):
+    """Лента из каталога — расширяет FeedItem статистикой и флагом подписки."""
+    id: int = Field(description="Уникальный ID ленты.")
+    url: str = Field(description="URL RSS-ленты.")
+    name: str = Field(description="Название ленты.")
+    favicon_url: Optional[str] = Field(default=None, description="URL логотипа.")
+    description: Optional[str] = Field(default=None, description="Описание ленты.")
+    category: Optional[str] = Field(default=None, description="Категория ленты (AI & ML, Engineering, и т.д.).")
+    enabled: bool = Field(description="Активна ли лента.")
+    error_count: int = Field(default=0, description="Кол-во подряд идущих ошибок при сборе.")
+    last_fetched_at: Optional[datetime] = Field(default=None, description="Когда последний раз обновлялась.")
+    subscribers: int = Field(default=0, description="Кол-во пользователей подписанных на ленту.")
+    posts_per_week: int = Field(default=0, description="Среднее кол-во постов в неделю за последние 30 дней.")
+    last_post_at: Optional[datetime] = Field(default=None, description="Дата последней статьи из ленты.")
+    is_subscribed: bool = Field(default=False, description="Подписан ли текущий пользователь на ленту.")
+    source_description: Optional[str] = Field(default=None, description="Описание источника (домена).")
+
+    model_config = {"from_attributes": True}
+
+
+class FeedQARequest(BaseModel):
+    """Запрос QA по статьям из лент (без RAG-коллекций)."""
+    feed_ids: List[int] = Field(default=[], description="ID лент пользователя.")
+    collection_id: Optional[int] = Field(default=None, description="ID BERTopic-коллекции (приоритет над feed_ids).")
+    question: str = Field(..., min_length=1, description="Вопрос пользователя.")
+    from_date: Optional[datetime] = Field(default=None, description="Начало периода (ISO 8601).")
+    to_date: Optional[datetime] = Field(default=None, description="Конец периода (ISO 8601).")
+    top_k: int = Field(default=12, ge=1, le=40, description="Количество статей-источников для контекста.")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"feed_ids": [1, 2, 3], "question": "Какие новые LLM вышли за последний месяц?"}
+        }
+    }
+
+
+class FeedQASourceItem(BaseModel):
+    """Источник в ответе QA по лентам."""
+    link: str
+    title: str
+    feed_name: str
+    published_at: Optional[datetime] = None
+    snippet: str
+    article_id: int = 0
+
+
+class FeedQAResponse(BaseModel):
+    """Ответ QA по лентам."""
+    status: str
+    answer: Optional[str] = None
+    sources: List[FeedQASourceItem] = []
+    article_count: int = 0
+    error: Optional[str] = None
+
+
+class FeedDigestRequest(BaseModel):
+    """Запрос дайджеста по статьям из лент."""
+    feed_ids: List[int] = Field(default=[], description="ID лент пользователя.")
+    collection_id: Optional[int] = Field(default=None, description="ID BERTopic-коллекции (приоритет над feed_ids).")
+    from_date: Optional[datetime] = Field(default=None, description="Начало периода.")
+    to_date: Optional[datetime] = Field(default=None, description="Конец периода.")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {"feed_ids": [1, 2, 3]}
+        }
+    }
+
+
 def serialize_digest_section_item(obj: Any) -> Any:
     """Сериализация элемента раздела дайджеста (datetime -> str)."""
     if hasattr(obj, "isoformat"):
@@ -268,3 +497,75 @@ def serialize_digest_section_item(obj: Any) -> Any:
     if isinstance(obj, list):
         return [serialize_digest_section_item(x) for x in obj]
     return obj
+
+
+# ── BERTopic API ───────────────────────────────────────────────────────────
+
+class BertopicRunRequest(BaseModel):
+    min_topic_size: int = Field(default=5, ge=2, description="Минимальный размер темы (статей).")
+    n_categories: int = Field(default=10, ge=2, description="Количество мета-категорий KMeans.")
+    skip_rag: bool = Field(default=True, description="Пропустить генерацию RAG-чанков (быстрее).")
+    source_filter: Optional[str] = Field(default=None, description="Фильтр по источнику (ILIKE).")
+    limit: Optional[int] = Field(default=None, ge=100, description="Лимит статей (по умолчанию все статьи подписок пользователя, рекомендуется не более 5000).")
+    days_back: Optional[int] = Field(default=None, ge=1, description="Статьи за последние N дней (None = все).")
+    gigachat_credentials: Optional[str] = Field(default=None, description="GigaChat API-ключ пользователя.")
+    gigachat_model: Optional[str] = Field(default=None, description="Модель GigaChat.")
+
+
+class BertopicRunResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+
+class BertopicStatusResponse(BaseModel):
+    task_id: str
+    status: str          # pending | running | done | error
+    progress: float      # 0.0 – 1.0
+    message: str
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    started_at: Optional[str] = None
+
+
+class BertopicTopicItem(BaseModel):
+    id: int                          # collection.id
+    name: str
+    description: Optional[str] = None
+    keywords: Optional[str] = None   # "word1, word2, word3, ..."
+    bertopic_topic_id: Optional[int] = None
+    article_count: int
+    model_version: Optional[str] = None
+
+
+class BertopicTopicsResponse(BaseModel):
+    topics: List[BertopicTopicItem]
+    total: int
+
+
+# ── Chat agent ────────────────────────────────────────────────────────────
+
+class ChatMessageRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="Новое сообщение пользователя.")
+    messages: List[Dict[str, Any]] = Field(default_factory=list, description="История диалога (без системного промпта).")
+    gigachat_credentials: str = Field(..., description="GigaChat API-ключ.")
+    gigachat_model: str = Field(default="GigaChat-Pro", description="Модель GigaChat.")
+
+
+class ChatMessageResponse(BaseModel):
+    answer: str = Field(description="Финальный ответ агента.")
+    sources: List[Dict[str, Any]] = Field(default_factory=list, description="Список источников: {title, link, published_at}.")
+    messages: List[Dict[str, Any]] = Field(description="Обновлённая история диалога (включая ответ агента).")
+
+
+# ── GigaChat credentials test ──────────────────────────────────────────────
+
+class GigaChatTestRequest(BaseModel):
+    credentials: str = Field(..., description="GigaChat API-ключ для проверки.")
+    model: Optional[str] = Field(default=None, description="Модель GigaChat (опционально).")
+
+
+class GigaChatTestResponse(BaseModel):
+    ok: bool = Field(description="True если подключение успешно.")
+    error: Optional[str] = Field(default=None, description="Описание ошибки если ok=False.")
+

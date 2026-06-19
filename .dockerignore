@@ -1,0 +1,43 @@
+# Секреты — никогда не должны попадать в образ
+.env
+.env.local
+
+# Git
+.git
+.gitignore
+
+# Python кэш
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Виртуальное окружение
+.venv
+venv
+env
+
+# ML-модели — кэшируются через Docker volume, не копируем в образ
+.cache/huggingface
+*.cache
+
+# Фронтенд — собирается отдельно, nginx раздаёт из volume
+RSS Reader/node_modules
+RSS Reader/dist
+RSS Reader/.next
+
+# Документация и заметки
+docs/
+*.md
+
+# Тесты
+tests/
+test_*
+
+# IDE
+.idea
+.vscode
+*.swp

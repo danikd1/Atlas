@@ -12,12 +12,18 @@ from urllib.error import URLError, HTTPError
 
 import pandas as pd
 import trafilatura
+from trafilatura.settings import use_config
 
 from config.config import (
     DEFAULT_TEXT_EXTRACTION_RETRIES,
     DEFAULT_TEXT_EXTRACTION_SLEEP,
     DEFAULT_TEXT_MIN_LENGTH,
 )
+
+# Конфиг trafilatura с явным таймаутом — без него fetch_url может висеть бесконечно
+# на медленных или зависших серверах
+_TRAFILATURA_CONFIG = use_config()
+_TRAFILATURA_CONFIG.set("DEFAULT", "DOWNLOAD_TIMEOUT", "20")
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +66,7 @@ def extract_full_text(
     """
     for attempt in range(retries):
         try:
-            downloaded = trafilatura.fetch_url(url)
+            downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
 
             # Fallback: сайт блокирует стандартный UA или отдаёт пустую/неполную страницу (toptal, dzone и др.)
             if not downloaded:
@@ -69,9 +75,10 @@ def extract_full_text(
             if downloaded:
                 text = trafilatura.extract(
                     downloaded,
-                    include_links=False,
-                    include_images=False,
-                    include_tables=False,
+                    output_format="html",
+                    include_links=True,
+                    include_images=True,
+                    include_tables=True,
                     favor_recall=True,
                     deduplicate=True,
                 )
@@ -90,9 +97,10 @@ def extract_full_text(
                 if downloaded:
                     text = trafilatura.extract(
                         downloaded,
-                        include_links=False,
-                        include_images=False,
-                        include_tables=False,
+                        output_format="html",
+                        include_links=True,
+                        include_images=True,
+                        include_tables=True,
                         favor_recall=True,
                         deduplicate=True,
                     )
